@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "coam"
+version = "0.1.0"
+description = "COAM facilitates generating custom jaw geometry that allows additively manufactured parts to be conventionally clamped. "
+authors = ["Constantin Chaumet <constantin.chaumet@tu-dortmund.de>", "Jan Liß <jan.liß@tu-dortmund.de>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">= 3.10, < 3.12"
+abqpy = "2023.7.0"
+jinja2 = "^3"
+cadquery = "^2.4.0"
+
+[tool.poetry.dev-dependencies]
+black = "^23"
+flake8 = "^7"
+isort = "^5"
+pyright = "^1"
+pytest = "^7"
+pre-commit = "^3"
+
+[tool.poetry.scripts]
+optimize = "coam.coam:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

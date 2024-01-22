@@ -1,0 +1,339 @@
+from abaqus import *
+from abaqusConstants import *
+from mesh import *
+from optimization import *
+import visualization
+
+job_name = "ClampSimulation"
+# Jinja varies this as well, part of hyperparameters
+clamping_force = 1280.0
+
+mdb.models.changeKey(fromName="Model-1", toName="ClampSimulation")
+model = mdb.models["ClampSimulation"]
+jaw_actuated_acis = mdb.openStep(
+    "{{ cwd }}/iterations/{{ iteration }}/jaw_actuated.step",
+    scaleFromFile=OFF,
+)
+jaw_actuated = model.PartFromGeometryFile(
+    combine=False,
+    dimensionality=THREE_D,
+    geometryFile=jaw_actuated_acis,
+    name="jaw_actuated",
+    type=DISCRETE_RIGID_SURFACE,
+)
+
+jaw_fixed_acis = mdb.openStep(
+    "{{ cwd }}/iterations/{{ iteration }}/jaw_fixed.step",
+    scaleFromFile=OFF,
+)
+jaw_fixed = model.PartFromGeometryFile(
+    combine=False,
+    dimensionality=THREE_D,
+    geometryFile=jaw_fixed_acis,
+    name="jaw_fixed",
+    type=DISCRETE_RIGID_SURFACE,
+)
+
+part_geometry_acis = mdb.openStep(
+    "{{ cwd }}/iterations/{{ iteration }}/part_geometry.step",
+    scaleFromFile=OFF,
+)
+part_geometry = model.PartFromGeometryFile(
+    combine=False,
+    dimensionality=THREE_D,
+    geometryFile=part_geometry_acis,
+    name="part_geometry",
+    type=DEFORMABLE_BODY,
+)
+
+additive_steel_material = model.Material(name="Stainless_Steel_316L")
+additive_steel_material.setValues(description="")
+additive_steel_material.Elastic(
+    dependencies=0,
+    moduli=LONG_TERM,
+    noCompression=OFF,
+    noTension=OFF,
+    table=((193000.0, 0.3),),
+    temperatureDependency=OFF,
+    type=ISOTROPIC,
+)
+additive_steel_material.Density(
+    dependencies=0,
+    distributionType=UNIFORM,
+    fieldName="",
+    table=((7.9e-09,),),
+    temperatureDependency=OFF,
+)
+additive_steel_material.Plastic(
+    dataType=HALF_CYCLE,
+    dependencies=0,
+    extrapolation=CONSTANT,
+    hardening=ISOTROPIC,
+    numBackstresses=1,
+    rate=OFF,
+    scaleStress=None,
+    staticRecovery=OFF,
+    strainRangeDependency=OFF,
+    table=((520.0, 0.0), (605.0, 0.3)),
+    temperatureDependency=OFF,
+)
+
+steel = model.Material(name="Steel")
+steel.Density(
+    dependencies=0,
+    distributionType=UNIFORM,
+    fieldName="",
+    table=((7.85e-09,),),
+    temperatureDependency=OFF,
+)
+steel.setValues(materialIdentifier="")
+steel.Elastic(
+    dependencies=0,
+    moduli=LONG_TERM,
+    noCompression=OFF,
+    noTension=OFF,
+    table=((210000.0, 0.3),),
+    temperatureDependency=OFF,
+    type=ISOTROPIC,
+)
+steel.setValues(description="")
+
+part_section = model.HomogeneousSolidSection(
+    material="Stainless_Steel_316L", name="part-section", thickness=None
+)
+model.HomogeneousSolidSection(material="Steel", name="actuated-section", thickness=None)
+model.HomogeneousSolidSection(material="Steel", name="fixed-section", thickness=None)
+
+part_set = part_geometry.Set(
+    cells=part_geometry.cells,
+    name="part-set",
+)
+part_geometry.SectionAssignment(
+    offset=0.0,
+    offsetField="",
+    offsetType=MIDDLE_SURFACE,
+    region=part_set,
+    sectionName="part-section",
+    thicknessAssignment=FROM_SECTION,
+)
+
+jaw_actuated.RemoveCells(cellList=jaw_actuated.cells)
+jaw_fixed.RemoveCells(cellList=jaw_fixed.cells)
+
+part_geometry.setMeshControls(
+    elemShape=TET,
+    regions=part_geometry.cells,
+    technique=FREE,
+)
+part_geometry.setElementType(
+    elemTypes=(
+        ElemType(elemCode=C3D20R, elemLibrary=STANDARD),
+        ElemType(elemCode=C3D15, elemLibrary=STANDARD),
+        ElemType(elemCode=C3D10, elemLibrary=STANDARD),
+    ),
+    regions=part_set,
+)
+part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
+part_geometry.generateMesh()
+
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5.0)
+jaw_actuated.generateMesh()
+
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5.0)
+jaw_fixed.generateMesh()
+
+reference_point_load = model.rootAssembly.ReferencePoint(
+    point=(0, 0, 0)
+)
+reference_point_static = model.rootAssembly.ReferencePoint(
+    point=(0, 0, 0)
+)
+
+part_instance = model.rootAssembly.Instance(dependent=ON, name="part_geometry-1", part=part_geometry)
+jaw_actuated_instance = model.rootAssembly.Instance(dependent=ON, name="jaw_actuated-1", part=jaw_actuated)
+jaw_fixed_instance = model.rootAssembly.Instance(dependent=ON, name="jaw_fixed-1", part=jaw_fixed)
+
+jaw_actuated_instance_set = model.rootAssembly.Set(
+    faces=jaw_actuated_instance.faces,
+    name="jaw_actuated_Set",
+)
+
+model.RigidBody(
+    bodyRegion=jaw_actuated_instance_set,
+    name="Constraint-jaw_actuated",
+    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[1],))
+)
+
+jaw_fixed_instance_set = model.rootAssembly.Set(
+    faces=jaw_fixed_instance.faces,
+    name="jaw_fixed_Set",
+)
+model.RigidBody(
+    bodyRegion=jaw_fixed_instance_set,
+    name="Constraint-jaw_fixed",
+    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[2],))
+)
+
+model.rootAssembly.regenerate()
+model.StaticStep(
+    initialInc=0.01,
+    maxInc=0.1,
+    maxNumInc=1000000,
+    minInc=1e-15,
+    name="Apply-Force",
+    nlgeom=ON,
+    previous="Initial",
+)
+
+model.fieldOutputRequests["F-Output-1"].setValues(
+    numIntervals=20,
+    variables=(
+        "S",
+        "PE",
+        "PEEQ",
+        "PEMAG",
+        "LE",
+        "U",
+        "RF",
+        "CF",
+        "CSTRESS",
+        "CDISP",
+        "ENER",
+        "ELEN",
+        "ELEDEN",
+    ),
+)
+model.historyOutputRequests["H-Output-1"].setValues(
+    variables=(
+        "CSTRESS",
+        "CDSTRESS",
+        "CDISP",
+        "CFNM",
+        "CFN1",
+        "CFN2",
+        "CFN3",
+        "CFSM",
+        "CFS1",
+        "CFS2",
+        "CFS3",
+        "CFTM",
+        "CFT1",
+        "CFT2",
+        "CFT3",
+        "CICPS",
+        "CMNM",
+        "CMN1",
+        "CMN2",
+        "CMN3",
+        "CMSM",
+        "CMS1",
+        "CMS2",
+        "CMS3",
+        "CMTM",
+        "CMT1",
+        "CMT2",
+        "CMT3",
+        "CAREA",
+        "CTRQ",
+        "XN1",
+        "XN2",
+        "XN3",
+        "XS1",
+        "XS2",
+        "XS3",
+        "XT1",
+        "XT2",
+        "XT3",
+        "PPRESS",
+    )
+)
+
+model.EncastreBC(
+    createStepName="Initial",
+    localCsys=None,
+    name="BC-jaw_fixed",
+    region=jaw_fixed_instance_set,
+)
+
+model.XasymmBC(
+    createStepName="Initial",
+    localCsys=None,
+    name="BC-jaw_actuated",
+    region=jaw_actuated_instance_set,
+)
+
+model.DisplacementBC(
+    amplitude=UNSET,
+    createStepName="Initial",
+    distributionType=UNIFORM,
+    fieldName="",
+    localCsys=None,
+    name="BC-3",
+    region=jaw_actuated_instance_set,
+    u1=UNSET,
+    u2=UNSET,
+    u3=UNSET,
+    ur1=UNSET,
+    ur2=SET,
+    ur3=SET,
+)
+
+model.ContactProperty("IntProp-Fric")
+model.interactionProperties["IntProp-Fric"].TangentialBehavior(
+    dependencies=0,
+    directionality=ISOTROPIC,
+    elasticSlipStiffness=None,
+    formulation=PENALTY,
+    fraction=0.005,
+    maximumElasticSlip=FRACTION,
+    pressureDependency=OFF,
+    shearStressLimit=None,
+    slipRateDependency=OFF,
+    table=((0.24,),),
+    temperatureDependency=OFF,
+)
+model.interactionProperties["IntProp-Fric"].NormalBehavior(
+    allowSeparation=ON, constraintEnforcementMethod=DEFAULT, pressureOverclosure=HARD
+)
+
+model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
+                       includeMeshShell=OFF, includeMeshSolid=OFF, includeMeshMembrane=OFF,
+                       includeNonOverlapping=OFF)
+
+clamping_set = model.rootAssembly.Set(
+    name="Clamping-Load", referencePoints=(model.rootAssembly.referencePoints[1],))
+
+model.ConcentratedForce(
+    cf1=-clamping_force,
+    createStepName="Apply-Force",
+    distributionType=UNIFORM,
+    field="",
+    localCsys=None,
+    name="Load-Clamping_Force",
+    region=clamping_set,
+)
+
+job = mdb.Job(
+    contactPrint=OFF,
+    echoPrint=OFF,
+    explicitPrecision=SINGLE,
+    historyPrint=OFF,
+    model="ClampSimulation",
+    modelPrint=OFF,
+    name=job_name,
+    nodalOutputPrecision=SINGLE,
+    numCpus=8,
+    numDomains=8,
+    numGPUs=1,
+    type=ANALYSIS,
+)
+
+mdb.jobs[job_name].writeInput()
+mdb.saveAs(str(job_name) + ".cae")
+# job.submit()
+# job.waitForCompletion()
+# odb = visualization.openOdb(str(job_name) + ".odb")
+# frame = odb.steps["Apply-Force"].frames[-1]
+# dispField = frame.fieldOutputs["U"]
+# print(dispField)
+
