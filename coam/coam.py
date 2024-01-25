@@ -1,21 +1,16 @@
 import os
 import pathlib
-import random
-import sys
 from functools import reduce
-from typing import Tuple, List
+from pathlib import Path
 
-import OCP
 import cadquery as cq
 from OCP import TopoDS
 from OCP.STEPControl import STEPControl_Reader
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
-from cadquery import Shape, Workplane, Face
-
+from cadquery import Shape, Workplane
 from jinja2 import Environment, PackageLoader
-from pathlib import Path
 
 env = Environment(loader=PackageLoader("coam", "templates"))
 
@@ -50,27 +45,45 @@ def get_faces_for_ids(face_ids: list[int], part: Workplane):
 
 def main():
     part, face_ids = import_step_with_markers("resources/effector.step")
-    part = part.rotateAboutCenter((0, 0, 1), random.randint(0, 360))
-    part = part.rotateAboutCenter((0, 1, 0), random.randint(0, 360))
-    face_box = reduce(
-        lambda a, b: a.add(b),
-        [face.BoundingBox() for face in get_faces_for_ids(face_ids, part)],
-    )
+    # part = part.rotateAboutCenter((0, 0, 1), random.randint(0, 360))
+    part_box = part.val().BoundingBox()
+    part_movement_increment = 0.1 * part_box.xlen / 80.0
+    # part = part.rotateAboutCenter((0, 1, 0), random.randint(0, 360))
+    # face_box = reduce(
+    #    lambda a, b: a.add(b),
+    #    [face.BoundingBox() for face in get_faces_for_ids(face_ids, part)],
+    # )
     jaw_actuated = (
         cq.Workplane("XY")
-        .box(20, 80, face_box.zmax - face_box.zmin + 10)
-        .translate((face_box.xmin - 10, 0, (face_box.zmax + face_box.zmin) / 2))
-        - part
+        .box(20, 80, part_box.zmax - part_box.zmin + 10)
+        .translate((part_box.xmin - 10, 0, (part_box.zmax + part_box.zmin) / 2))
     )
     jaw_fixed = (
         cq.Workplane("XY")
-        .box(20, 80, face_box.zmax - face_box.zmin + 10)
-        .translate((face_box.xmax + 10, 0, (face_box.zmax + face_box.zmin) / 2))
-        - part
+        .box(20, 80, part_box.zmax - part_box.zmin + 10)
+        .translate((part_box.xmax + 10, 0, (part_box.zmax + part_box.zmin) / 2))
     )
+    cut_actuated_jaws = []
+    cut_fixed_jaws = []
+    for i in range(80):
+        print(i)
+        cut_actuated_jaws.append(
+            jaw_actuated.translate((i * part_movement_increment, 0, 0))
+            .cut(part, clean=False)
+            .translate((-i * part_movement_increment, 0, 0))
+        )
+        cut_fixed_jaws.append(
+            jaw_fixed.translate((-i * part_movement_increment, 0, 0))
+            .cut(part, clean=False)
+            .translate((i * part_movement_increment, 0, 0))
+        )
+
+    jaw_actuated = reduce(lambda a, b: a & b, cut_actuated_jaws)
+    print(1)
+    jaw_fixed = reduce(lambda a, b: a & b, cut_fixed_jaws)
+    print(2)
 
     Path("iterations/1").mkdir(parents=True, exist_ok=True)
-    # shutil.copytree("resources", "iterations/1", dirs_exist_ok=True)
     cq.exporters.export(part, "iterations/1/part_geometry.step")
     cq.exporters.export(jaw_actuated, "iterations/1/jaw_actuated.step")
     cq.exporters.export(jaw_fixed, "iterations/1/jaw_fixed.step")
