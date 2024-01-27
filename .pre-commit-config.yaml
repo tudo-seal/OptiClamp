@@ -47,4 +47,4 @@ repos:
     rev: 22.3.0
     hooks:
       - id: black
-        exclude: ^static/
+        exclude: ^resources/

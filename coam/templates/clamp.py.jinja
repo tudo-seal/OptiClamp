@@ -2,7 +2,6 @@ from abaqus import *
 from abaqusConstants import *
 from mesh import *
 from optimization import *
-import visualization
 
 job_name = "ClampSimulation"
 # Jinja varies this as well, part of hyperparameters
@@ -10,6 +9,7 @@ clamping_force = 1280.0
 
 mdb.models.changeKey(fromName="Model-1", toName="ClampSimulation")
 model = mdb.models["ClampSimulation"]
+
 jaw_actuated_acis = mdb.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/jaw_actuated.step",
     scaleFromFile=OFF,
@@ -35,7 +35,7 @@ jaw_fixed = model.PartFromGeometryFile(
 )
 
 part_geometry_acis = mdb.openStep(
-    "{{ cwd }}/iterations/{{ iteration }}/part_geometry.step",
+    "{{ cwd }}/iterations/{{ iteration }}/part_geometry_simplified.step",
     scaleFromFile=OFF,
 )
 part_geometry = model.PartFromGeometryFile(
@@ -45,6 +45,8 @@ part_geometry = model.PartFromGeometryFile(
     name="part_geometry",
     type=DEFORMABLE_BODY,
 )
+
+
 
 additive_steel_material = model.Material(name="Stainless_Steel_316L")
 additive_steel_material.setValues(description="")
@@ -136,17 +138,17 @@ part_geometry.setElementType(
 part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
 part_geometry.generateMesh()
 
-jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5.0)
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=8.0)
 jaw_actuated.generateMesh()
 
-jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5.0)
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=8.0)
 jaw_fixed.generateMesh()
 
 reference_point_load = model.rootAssembly.ReferencePoint(
-    point=(0, 0, 0)
+    point=(-100, 0, 0)
 )
 reference_point_static = model.rootAssembly.ReferencePoint(
-    point=(0, 0, 0)
+    point=(100, 0, 0)
 )
 
 part_instance = model.rootAssembly.Instance(dependent=ON, name="part_geometry-1", part=part_geometry)
@@ -161,7 +163,7 @@ jaw_actuated_instance_set = model.rootAssembly.Set(
 model.RigidBody(
     bodyRegion=jaw_actuated_instance_set,
     name="Constraint-jaw_actuated",
-    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[1],))
+    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[1],)),
 )
 
 jaw_fixed_instance_set = model.rootAssembly.Set(
@@ -171,15 +173,15 @@ jaw_fixed_instance_set = model.rootAssembly.Set(
 model.RigidBody(
     bodyRegion=jaw_fixed_instance_set,
     name="Constraint-jaw_fixed",
-    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[2],))
+    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[2],)),
 )
 
 model.rootAssembly.regenerate()
 model.StaticStep(
-    initialInc=0.01,
-    maxInc=0.1,
-    maxNumInc=1000000,
-    minInc=1e-15,
+    initialInc=1,
+    maxInc=1,
+    maxNumInc=100,
+    minInc=1e-10,
     name="Apply-Force",
     nlgeom=ON,
     previous="Initial",
@@ -189,62 +191,13 @@ model.fieldOutputRequests["F-Output-1"].setValues(
     numIntervals=20,
     variables=(
         "S",
-        "PE",
-        "PEEQ",
-        "PEMAG",
-        "LE",
         "U",
-        "RF",
-        "CF",
-        "CSTRESS",
-        "CDISP",
-        "ENER",
-        "ELEN",
-        "ELEDEN",
     ),
 )
 model.historyOutputRequests["H-Output-1"].setValues(
+    numIntervals=20,
     variables=(
         "CSTRESS",
-        "CDSTRESS",
-        "CDISP",
-        "CFNM",
-        "CFN1",
-        "CFN2",
-        "CFN3",
-        "CFSM",
-        "CFS1",
-        "CFS2",
-        "CFS3",
-        "CFTM",
-        "CFT1",
-        "CFT2",
-        "CFT3",
-        "CICPS",
-        "CMNM",
-        "CMN1",
-        "CMN2",
-        "CMN3",
-        "CMSM",
-        "CMS1",
-        "CMS2",
-        "CMS3",
-        "CMTM",
-        "CMT1",
-        "CMT2",
-        "CMT3",
-        "CAREA",
-        "CTRQ",
-        "XN1",
-        "XN2",
-        "XN3",
-        "XS1",
-        "XS2",
-        "XS3",
-        "XT1",
-        "XT2",
-        "XT3",
-        "PPRESS",
     )
 )
 
@@ -296,9 +249,16 @@ model.interactionProperties["IntProp-Fric"].NormalBehavior(
     allowSeparation=ON, constraintEnforcementMethod=DEFAULT, pressureOverclosure=HARD
 )
 
-model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
-                       includeMeshShell=OFF, includeMeshSolid=OFF, includeMeshMembrane=OFF,
-                       includeNonOverlapping=OFF)
+global_contact = model.ContactStd(createStepName='Initial', name=
+    'GlobalContact')
+global_contact.setValues(globalSmoothing=
+    False)
+global_contact.contactPropertyAssignments.appendInStep(
+    assignments=((GLOBAL, SELF, 'IntProp-Fric'), ), stepName='Initial')
+
+#model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
+#                       includeMeshShell=OFF, includeMeshSolid=OFF, includeMeshMembrane=OFF,
+#                       includeNonOverlapping=OFF, createUnionOfMainSecondarySurfaces=ON)
 
 clamping_set = model.rootAssembly.Set(
     name="Clamping-Load", referencePoints=(model.rootAssembly.referencePoints[1],))
@@ -336,4 +296,3 @@ mdb.saveAs(str(job_name) + ".cae")
 # frame = odb.steps["Apply-Force"].frames[-1]
 # dispField = frame.fieldOutputs["U"]
 # print(dispField)
-
