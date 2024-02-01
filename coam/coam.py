@@ -1,3 +1,4 @@
+import datetime
 import os
 import pathlib
 import shutil
@@ -7,7 +8,8 @@ import cadquery as cq
 import docker
 import OCP.TopoDS
 import pymeshlab
-from cadquery import Shape, Workplane
+from OCP.Interface import Interface_Static
+from cadquery import Shape, Workplane, Solid
 from jinja2 import Environment, PackageLoader
 from OCP import TopoDS
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Sewing
@@ -20,8 +22,9 @@ from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
+from openbox import Optimizer, space as sp
 
-env = Environment(loader=PackageLoader("coam", "templates"))
+env = Environment(loader=PackageLoader(f"coam", f"templates"))
 
 
 def convert_stl_to_step(filename: str):
@@ -34,11 +37,11 @@ def convert_stl_to_step(filename: str):
         exp.Next()
     sew.Perform()
     writer = STEPControl_Writer()
+    writer.SetTolerance(1e-8)
+    Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
+    Interface_Static.SetCVal_s("write.step.schema", "AP203")
     writer.Transfer(sew.SewedShape(), STEPControl_ManifoldSolidBrep)
     writer.Write(f"{os.path.splitext(filename)[0]}.step")
-    return
-    cq_shape = Shape.cast(sew.SewedShape())
-    cq_shape.exportStep(f"{os.path.splitext(filename)[0]}.step", write_pcurves=False)
 
 
 def import_step_with_markers(file_name: str) -> tuple[Workplane, list[int]]:
@@ -62,7 +65,7 @@ def import_step_with_markers(file_name: str) -> tuple[Workplane, list[int]]:
         for idx, face, in enumerate(cq_shape.Faces())
         if face.wrapped.HashCode(1000000000) in no_intersect_face_hashes
     ]
-    return cq.Workplane("XY").newObject([cq_shape]), no_intersect_face_ids
+    return cq.Workplane(f"XY").newObject([cq_shape]), no_intersect_face_ids
 
 
 def get_faces_for_ids(face_ids: list[int], part: Workplane):
@@ -70,75 +73,101 @@ def get_faces_for_ids(face_ids: list[int], part: Workplane):
 
 
 def main():
-    Path("iterations/1").mkdir(parents=True, exist_ok=True)
-    shutil.copy("resources/part_geometry.stl", "iterations/1")
-    remesh_simplify_part("iterations/1/part_geometry.stl")
+    space = sp.Space()
+    rotation = sp.Real("rotation", 0.0, 359.9)
+    space.add_variables([rotation])
+    opt = Optimizer(
+        generate_cae_and_simulate,
+        space,
+        max_runs=50,
+        task_id="OptimizeU",
+        surrogate_type="prf",
+        initial_runs=4,  # 2*(dim+1)
+        init_strategy="sobol",
+    )
+    history = opt.run()
+    print(history)
 
+
+def generate_cae_and_simulate(config: dict):
+    key = (
+        "{date:%Y-%m-%d_%H-%M-%S}".format(date=datetime.datetime.now())
+        + f"_Rot-{config['rotation']}"
+    )
+    Path(f"iterations/{key}").mkdir(parents=True, exist_ok=True)
+    shutil.copy(f"resources/part_geometry.stl", f"iterations/{key}")
+    remesh_simplify_part(f"iterations/{key}/part_geometry.stl", config["rotation"])
     client = docker.from_env()
-    client.images.pull("pymesh/pymesh")
+    client.images.pull(f"pymesh/pymesh")
     client.containers.run(
         "pymesh/pymesh",
         command=[
             "python",
             "/tmp/minkowski/minkowski.py",
             "part_geometry_simplified.stl",
-            "10",
-            "1",
+            f"10",
+            f"{key}",
         ],
-        volumes={os.getcwd(): {"bind": "/tmp/", "mode": "rw"}},
+        volumes={os.getcwd(): {"bind": "/tmp/", f"mode": "rw"}},
         detach=False,
         auto_remove=True,
     )
-    convert_stl_to_step("iterations/1/part_geometry_simplified.stl")
-    convert_stl_to_step("iterations/1/part_geometry_minkowski.stl")
-
-    part = cq.importers.importStep("iterations/1/part_geometry_minkowski.step")
+    convert_stl_to_step(f"iterations/{key}/part_geometry_simplified.stl")
+    convert_stl_to_step(f"iterations/{key}/part_geometry_minkowski.stl")
+    part = cq.importers.importStep(f"iterations/{key}/part_geometry_minkowski.step")
     part_box = part.val().BoundingBox()
     jaw_actuated = (
-        cq.Workplane("XY")
+        cq.Workplane(f"XY")
         .box(20, 80, part_box.zmax - part_box.zmin + 10)
         .translate((part_box.xmin, 0, (part_box.zmax + part_box.zmin) / 2))
     )
     jaw_fixed = (
-        cq.Workplane("XY")
+        cq.Workplane(f"XY")
         .box(20, 80, part_box.zmax - part_box.zmin + 10)
         .translate((part_box.xmax, 0, (part_box.zmax + part_box.zmin) / 2))
     )
-    cq.exporters.export(jaw_actuated, "iterations/1/jaw_actuated.stl")
-    cq.exporters.export(jaw_fixed, "iterations/1/jaw_fixed.stl")
-
-    jaw_actuated_stl = remesh_simplify_jaw_base("iterations/1/jaw_actuated.stl")
-    jaw_actuated_stl.load_new_mesh("iterations/1/part_geometry_minkowski.stl")
+    cq.exporters.export(jaw_actuated, f"iterations/{key}/jaw_actuated.stl")
+    cq.exporters.export(jaw_fixed, f"iterations/{key}/jaw_fixed.stl")
+    jaw_actuated_stl = pymeshlab.MeshSet()
+    jaw_actuated_stl.load_new_mesh(f"iterations/{key}/jaw_actuated.stl")
+    jaw_actuated_stl.meshing_isotropic_explicit_remeshing(
+        targetlen=pymeshlab.PureValue(1.5)
+    )
+    jaw_actuated_stl.load_new_mesh(f"iterations/{key}/part_geometry_minkowski.stl")
     jaw_actuated_stl.generate_boolean_difference(first_mesh=0, second_mesh=1)
-    jaw_actuated_stl.save_current_mesh("iterations/1/jaw_actuated_cut.stl")
+    jaw_actuated_stl.save_current_mesh(f"iterations/{key}/jaw_actuated_cut.stl")
 
-    jaw_fixed_stl = remesh_simplify_jaw_base("iterations/1/jaw_fixed.stl")
-    jaw_fixed_stl.load_new_mesh("iterations/1/part_geometry_minkowski.stl")
+    jaw_fixed_stl = pymeshlab.MeshSet()
+    jaw_fixed_stl.load_new_mesh(f"iterations/{key}/jaw_fixed.stl")
+    jaw_fixed_stl.meshing_isotropic_explicit_remeshing(
+        targetlen=pymeshlab.PureValue(1.5)
+    )
+    jaw_fixed_stl.load_new_mesh(f"iterations/{key}/part_geometry_minkowski.stl")
     jaw_fixed_stl.generate_boolean_difference(first_mesh=0, second_mesh=1)
-    jaw_fixed_stl.save_current_mesh("iterations/1/jaw_fixed_cut.stl")
+    jaw_fixed_stl.save_current_mesh(f"iterations/{key}/jaw_fixed_cut.stl")
 
-    convert_stl_to_step("iterations/1/jaw_actuated_cut.stl")
-    convert_stl_to_step("iterations/1/jaw_fixed_cut.stl")
-    jaw_actuated = cq.importers.importStep("iterations/1/jaw_actuated_cut.step")
-    jaw_fixed = cq.importers.importStep("iterations/1/jaw_fixed_cut.step")
+    convert_stl_to_step(f"iterations/{key}/jaw_actuated_cut.stl")
+    convert_stl_to_step(f"iterations/{key}/jaw_fixed_cut.stl")
+    jaw_actuated = cq.importers.importStep(f"iterations/{key}/jaw_actuated_cut.step")
+    jaw_fixed = cq.importers.importStep(f"iterations/{key}/jaw_fixed_cut.step")
     jaw_actuated = jaw_actuated.translate((10, 0, 0))
     jaw_fixed = jaw_fixed.translate((-10, 0, 0))
-
-    cq.exporters.export(jaw_actuated, "iterations/1/jaw_actuated.step")
-    cq.exporters.export(jaw_fixed, "iterations/1/jaw_fixed.step")
+    cq.exporters.export(jaw_actuated, f"iterations/{key}/jaw_actuated.step")
+    cq.exporters.export(jaw_fixed, f"iterations/{key}/jaw_fixed.step")
     data = {
         "cwd": pathlib.Path().resolve().as_posix(),
-        "iteration": "1",
+        "iteration": f"{key}",
     }
-    with open("iterations/1/clamp.py", "w") as fh:
-        fh.write(env.get_template("clamp.py.jinja").render(data))
-    os.chdir("iterations/1")
-    os.system("abaqus cae script=clamp.py")
+    with open(f"iterations/{key}/clamp.py", f"w") as fh:
+        fh.write(env.get_template(f"clamp.py.jinja").render(data))
+    os.chdir(f"iterations/{key}")
+    os.system(f"abaqus cae nogui=clamp.py")
+    results = open("results.coam", "r")
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    return {"objectives": [float(results.read())]}
 
 
-def remesh_simplify_part(
-    filename: str,
-):
+def remesh_simplify_part(filename: str, rotation: float):
     ms = pymeshlab.MeshSet()
     ms.load_new_mesh(filename)
     ms.meshing_decimation_quadric_edge_collapse(
@@ -148,27 +177,10 @@ def remesh_simplify_part(
         preservetopology=True,
         planarquadric=True,
     )
-    ms.meshing_isotropic_explicit_remeshing()
-    ms.meshing_decimation_quadric_edge_collapse(
-        targetfacenum=5000,
-        preserveboundary=True,
-        preservenormal=True,
-        preservetopology=True,
-        planarquadric=True,
-    )
-    ms.save_current_mesh(f"{os.path.splitext(filename)[0]}_simplified.stl")
-    return ms
-
-
-def remesh_simplify_jaw_base(
-    filename: str,
-):
-    ms = pymeshlab.MeshSet()
-    ms.load_new_mesh(filename)
-    # ms.meshing_surface_subdivision_midpoint(iterations=4)
-    ms.meshing_isotropic_explicit_remeshing(
-        targetlen=pymeshlab.PercentageValue(2.00000)
-    )
+    ms.meshing_isotropic_explicit_remeshing(targetlen=pymeshlab.PercentageValue(1.5))
+    ms.meshing_repair_non_manifold_edges()
+    ms.meshing_repair_non_manifold_vertices()
+    ms.compute_matrix_from_rotation(rotaxis="Z axis", angle=rotation)
     ms.save_current_mesh(f"{os.path.splitext(filename)[0]}_simplified.stl")
     return ms
 

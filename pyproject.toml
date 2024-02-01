@@ -6,13 +6,14 @@ authors = ["Constantin Chaumet <constantin.chaumet@tu-dortmund.de>", "Jan Liß <
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = ">= 3.10, < 3.12"
+python = ">= 3.10, < 3.11"
 abqpy = "2023.7.0"
 jinja2 = "^3"
 numpy = "^1"
 cadquery = "2.4.0"
 pymeshlab = "^2023.12"
-docker = "^7.0.0"
+docker = "^7"
+openbox = { extras = ["extra"], version = "^0.8.1" }
 
 [tool.poetry.scripts]
 optimize = "coam.coam:main"

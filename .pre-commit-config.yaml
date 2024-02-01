@@ -9,25 +9,25 @@ repos:
       - id: check-yaml
       - id: check-json
       - id: mixed-line-ending
-        args: ["--fix=lf"]
+        args: [ "--fix=lf" ]
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v2.7.1
     hooks:
       - id: prettier
         files: \.(js|ts|jsx|tsx|css|less|html|json|markdown|md|yaml|yml)$
         exclude: .*min\.js
-        args: ["--end-of-line", "lf"]
+        args: [ "--end-of-line", "lf" ]
   - repo: https://github.com/asottile/pyupgrade
     rev: v3.1.0
     hooks:
       - id: pyupgrade
-        args: [--py310-plus]
-        exclude: ^static/
+        args: [ --py310-plus ]
+        exclude: ^templates/
   - repo: https://github.com/PyCQA/autoflake
     rev: v1.7.6
     hooks:
       - id: autoflake
-        exclude: ^static/
+        exclude: ^templates/
         args:
           [
             "--in-place",
@@ -41,10 +41,11 @@ repos:
     rev: 5.12.0
     hooks:
       - id: isort
-        args: ["--profile", "black"]
-        exclude: ^static/
+        args: [ "--profile", "black" ]
+        exclude: ^templates/
   - repo: https://github.com/psf/black
     rev: 22.3.0
     hooks:
       - id: black
         exclude: ^resources/
+

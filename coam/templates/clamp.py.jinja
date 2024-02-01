@@ -1,7 +1,11 @@
+import visualization
 from abaqus import *
 from abaqusConstants import *
 from mesh import *
 from optimization import *
+import part
+import interaction
+import step
 
 job_name = "ClampSimulation"
 # Jinja varies this as well, part of hyperparameters
@@ -10,7 +14,7 @@ clamping_force = 1280.0
 mdb.models.changeKey(fromName="Model-1", toName="ClampSimulation")
 model = mdb.models["ClampSimulation"]
 
-jaw_actuated_acis = mdb.openStep(
+jaw_actuated_acis = session.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/jaw_actuated.step",
     scaleFromFile=OFF,
 )
@@ -21,8 +25,9 @@ jaw_actuated = model.PartFromGeometryFile(
     name="jaw_actuated",
     type=DISCRETE_RIGID_SURFACE,
 )
+jaw_actuated
 
-jaw_fixed_acis = mdb.openStep(
+jaw_fixed_acis = session.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/jaw_fixed.step",
     scaleFromFile=OFF,
 )
@@ -34,7 +39,7 @@ jaw_fixed = model.PartFromGeometryFile(
     type=DISCRETE_RIGID_SURFACE,
 )
 
-part_geometry_acis = mdb.openStep(
+part_geometry_acis = session.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/part_geometry_simplified.step",
     scaleFromFile=OFF,
 )
@@ -45,8 +50,6 @@ part_geometry = model.PartFromGeometryFile(
     name="part_geometry",
     type=DEFORMABLE_BODY,
 )
-
-
 
 additive_steel_material = model.Material(name="Stainless_Steel_316L")
 additive_steel_material.setValues(description="")
@@ -135,13 +138,13 @@ part_geometry.setElementType(
     ),
     regions=part_set,
 )
-part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
+part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=10)
 part_geometry.generateMesh()
 
-jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=8.0)
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
 jaw_actuated.generateMesh()
 
-jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=8.0)
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
 jaw_fixed.generateMesh()
 
 reference_point_load = model.rootAssembly.ReferencePoint(
@@ -180,7 +183,7 @@ model.rootAssembly.regenerate()
 model.StaticStep(
     initialInc=1,
     maxInc=1,
-    maxNumInc=100,
+    maxNumInc=10000,
     minInc=1e-10,
     name="Apply-Force",
     nlgeom=ON,
@@ -193,12 +196,6 @@ model.fieldOutputRequests["F-Output-1"].setValues(
         "S",
         "U",
     ),
-)
-model.historyOutputRequests["H-Output-1"].setValues(
-    numIntervals=20,
-    variables=(
-        "CSTRESS",
-    )
 )
 
 model.EncastreBC(
@@ -250,21 +247,25 @@ model.interactionProperties["IntProp-Fric"].NormalBehavior(
 )
 
 global_contact = model.ContactStd(createStepName='Initial', name=
-    'GlobalContact')
+'GlobalContact')
 global_contact.setValues(globalSmoothing=
-    False)
+                         False)
 global_contact.contactPropertyAssignments.appendInStep(
-    assignments=((GLOBAL, SELF, 'IntProp-Fric'), ), stepName='Initial')
+    assignments=((GLOBAL, SELF, 'IntProp-Fric'),), stepName='Initial')
 
+#This makes the FEM run faster I think if it works
 #model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
-#                       includeMeshShell=OFF, includeMeshSolid=OFF, includeMeshMembrane=OFF,
-#                       includeNonOverlapping=OFF, createUnionOfMainSecondarySurfaces=ON)
+#                       includeMeshShell=ON, includeMeshSolid=ON, includeMeshMembrane=ON,
+#                       includeNonOverlapping=OFF, createUnionOfMainSecondarySurfaces=ON, createUnionOfMainSurfaces=ON,
+#                       createUnionOfSecondarySurfaces=ON,
+#                       includeOverclosed=OFF, mergeWithinAngle=None,
+#                       meshedGeometrySearchTechnique=USE_MESH)
 
 clamping_set = model.rootAssembly.Set(
     name="Clamping-Load", referencePoints=(model.rootAssembly.referencePoints[1],))
 
 model.ConcentratedForce(
-    cf1=-clamping_force,
+    cf1=clamping_force,
     createStepName="Apply-Force",
     distributionType=UNIFORM,
     field="",
@@ -282,17 +283,25 @@ job = mdb.Job(
     modelPrint=OFF,
     name=job_name,
     nodalOutputPrecision=SINGLE,
-    numCpus=8,
-    numDomains=8,
+    numCpus=24,
+    numDomains=24,
     numGPUs=1,
     type=ANALYSIS,
 )
 
 mdb.jobs[job_name].writeInput()
 mdb.saveAs(str(job_name) + ".cae")
-# job.submit()
-# job.waitForCompletion()
-# odb = visualization.openOdb(str(job_name) + ".odb")
-# frame = odb.steps["Apply-Force"].frames[-1]
-# dispField = frame.fieldOutputs["U"]
+job.submit()
+job.waitForCompletion()
+odb = visualization.openOdb(str(job_name) + ".odb")
+frame = odb.steps["Apply-Force"].frames[-1]
+dispField = frame.fieldOutputs["U"]
+max = 0
+for i in range(len(dispField.values)):
+    u1 = dispField.values[i].data[0]
+    max = u1 if u1 > max else max
+file = open("results.coam", "w")
+file.write(str(max))
+file.close()
+
 # print(dispField)
