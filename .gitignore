@@ -214,3 +214,4 @@ migrations/
 simdir/
 *.rec
 iterations/
+logs/

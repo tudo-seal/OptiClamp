@@ -2,6 +2,7 @@ import visualization
 from abaqus import *
 from abaqusConstants import *
 from mesh import *
+import os
 from optimization import *
 import part
 import interaction
@@ -25,7 +26,7 @@ jaw_actuated = model.PartFromGeometryFile(
     name="jaw_actuated",
     type=DISCRETE_RIGID_SURFACE,
 )
-jaw_actuated
+jaw_actuated = model.parts["jaw_actuated"]
 
 jaw_fixed_acis = session.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/jaw_fixed.step",
@@ -38,6 +39,7 @@ jaw_fixed = model.PartFromGeometryFile(
     name="jaw_fixed",
     type=DISCRETE_RIGID_SURFACE,
 )
+jaw_fixed = model.parts["jaw_fixed"]
 
 part_geometry_acis = session.openStep(
     "{{ cwd }}/iterations/{{ iteration }}/part_geometry_simplified.step",
@@ -50,6 +52,37 @@ part_geometry = model.PartFromGeometryFile(
     name="part_geometry",
     type=DEFORMABLE_BODY,
 )
+part_geometry = model.parts["part_geometry"]
+
+reference_point_load = jaw_actuated.ReferencePoint(point=(-10.0,
+    0.0, 0.0))
+reference_point_static = jaw_fixed.ReferencePoint(point=(10.0,
+    0.0, 0.0))
+
+jaw_actuated.Surface(name='Surface',
+    side1Faces=
+    jaw_actuated.faces)
+jaw_fixed.Surface(name='Surface',
+    side1Faces=
+    jaw_fixed.faces)
+part_geometry.Surface(name='Surface',
+    side1Faces=
+    part_geometry.faces)
+
+if os.path.exists("retry.flag"):
+    try:
+        jaw_fixed.createVirtualTopology(
+                applyBlendControls=False, cornerAngleTolerance=30.0,
+                ignoreRedundantEntities=False, mergeShortEdges=False, mergeSliverFaces=
+                False, mergeSmallAngleFaces=False, mergeSmallFaces=True,
+                mergeThinStairFaces=False, smallFaceAreaThreshold=0.1)
+        jaw_actuated.createVirtualTopology(
+                applyBlendControls=False, cornerAngleTolerance=30.0,
+                ignoreRedundantEntities=False, mergeShortEdges=False, mergeSliverFaces=
+                False, mergeSmallAngleFaces=False, mergeSmallFaces=True,
+                mergeThinStairFaces=False, smallFaceAreaThreshold=0.1)
+    except Exception, e:
+          pass
 
 additive_steel_material = model.Material(name="Stainless_Steel_316L")
 additive_steel_material.setValues(description="")
@@ -138,46 +171,25 @@ part_geometry.setElementType(
     ),
     regions=part_set,
 )
-part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=10)
+part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 part_geometry.generateMesh()
 
-jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=500)
 jaw_actuated.generateMesh()
 
-jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=2.5)
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=500)
 jaw_fixed.generateMesh()
-
-reference_point_load = model.rootAssembly.ReferencePoint(
-    point=(-100, 0, 0)
-)
-reference_point_static = model.rootAssembly.ReferencePoint(
-    point=(100, 0, 0)
-)
 
 part_instance = model.rootAssembly.Instance(dependent=ON, name="part_geometry-1", part=part_geometry)
 jaw_actuated_instance = model.rootAssembly.Instance(dependent=ON, name="jaw_actuated-1", part=jaw_actuated)
 jaw_fixed_instance = model.rootAssembly.Instance(dependent=ON, name="jaw_fixed-1", part=jaw_fixed)
+jaw_actuated_instance_set = model.rootAssembly.Set(name="jaw_actuated_Set",
+    referencePoints=(
+    jaw_actuated_instance.referencePoints[2], ))
 
-jaw_actuated_instance_set = model.rootAssembly.Set(
-    faces=jaw_actuated_instance.faces,
-    name="jaw_actuated_Set",
-)
-
-model.RigidBody(
-    bodyRegion=jaw_actuated_instance_set,
-    name="Constraint-jaw_actuated",
-    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[1],)),
-)
-
-jaw_fixed_instance_set = model.rootAssembly.Set(
-    faces=jaw_fixed_instance.faces,
-    name="jaw_fixed_Set",
-)
-model.RigidBody(
-    bodyRegion=jaw_fixed_instance_set,
-    name="Constraint-jaw_fixed",
-    refPointRegion=Region(referencePoints=(model.rootAssembly.referencePoints[2],)),
-)
+jaw_fixed_instance_set = model.rootAssembly.Set(name="jaw_fixed_Set",
+    referencePoints=(
+    jaw_fixed_instance.referencePoints[2], ))
 
 model.rootAssembly.regenerate()
 model.StaticStep(
@@ -191,7 +203,6 @@ model.StaticStep(
 )
 
 model.fieldOutputRequests["F-Output-1"].setValues(
-    numIntervals=20,
     variables=(
         "S",
         "U",
@@ -252,6 +263,23 @@ global_contact.setValues(globalSmoothing=
                          False)
 global_contact.contactPropertyAssignments.appendInStep(
     assignments=((GLOBAL, SELF, 'IntProp-Fric'),), stepName='Initial')
+global_contact.includedPairs.setValuesInStep(
+    addPairs=((
+    jaw_actuated_instance.surfaces['Surface'],
+    part_instance.surfaces['Surface']),
+    (
+    jaw_fixed_instance.surfaces['Surface'],
+    part_instance.surfaces['Surface']))
+    , stepName='Initial', useAllstar=OFF)
+model.StdInitialization(name='ContactInitialization')
+global_contact.initializationAssignments.appendInStep(
+    assignments=((
+    jaw_actuated_instance.surfaces['Surface'],
+    part_instance.surfaces['Surface'],
+    'ContactInitialization'), (
+    jaw_fixed_instance.surfaces['Surface'],
+    part_instance.surfaces['Surface'],
+    'ContactInitialization')), stepName='Initial')
 
 #This makes the FEM run faster I think if it works
 #model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
@@ -262,7 +290,7 @@ global_contact.contactPropertyAssignments.appendInStep(
 #                       meshedGeometrySearchTechnique=USE_MESH)
 
 clamping_set = model.rootAssembly.Set(
-    name="Clamping-Load", referencePoints=(model.rootAssembly.referencePoints[1],))
+    name="Clamping-Load", referencePoints=(jaw_actuated_instance.referencePoints[2],))
 
 model.ConcentratedForce(
     cf1=clamping_force,
@@ -294,14 +322,30 @@ mdb.saveAs(str(job_name) + ".cae")
 job.submit()
 job.waitForCompletion()
 odb = visualization.openOdb(str(job_name) + ".odb")
-frame = odb.steps["Apply-Force"].frames[-1]
+try:
+    frame = odb.steps["Apply-Force"].frames[-1]
+# noinspection
+except Exception, e:
+    file = open("retry.flag", "w")
+    file.close()
+    file = open("results.coam", "w")
+    file.write("0")
+    file.close()
+    sys.exit()
+
 dispField = frame.fieldOutputs["U"]
 max = 0
 for i in range(len(dispField.values)):
     u1 = dispField.values[i].data[0]
     max = u1 if u1 > max else max
+if max == 0:
+    # Try to fix with virtual topology if failed
+    file = open("retry.flag", "w")
+    file.close()
+
 file = open("results.coam", "w")
 file.write(str(max))
 file.close()
+
 
 # print(dispField)
