@@ -1,32 +1,33 @@
 import datetime
+import glob
 import json
 import os
-import pathlib
 import shutil
-import tkinter.simpledialog
 from pathlib import Path
 
 import cadquery as cq
 import docker
 import OCP.TopoDS
 import pymeshlab
-from OCP.Interface import Interface_Static
 from cadquery import Shape, Workplane
 from jinja2 import Environment, PackageLoader
 from OCP import TopoDS
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+from OCP.Interface import Interface_Static
 from OCP.STEPControl import (
+    STEPControl_ManifoldSolidBrep,
     STEPControl_Reader,
     STEPControl_Writer,
-    STEPControl_ManifoldSolidBrep,
 )
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
 from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
-from openbox import Advisor, Observation, Optimizer, logger
+from openbox import Advisor, Observation, logger
 from openbox import space as sp
 from tqdm import tqdm
+
+from coam.util.choicebox import choicebox
 
 env = Environment(loader=PackageLoader(f"coam", f"templates"))
 
@@ -87,10 +88,12 @@ def main():
     space = sp.Space()
     rotation = sp.Real("rotation", 0.0, 120)
     space.add_variables([rotation])
-    experiment_name = tkinter.simpledialog.askstring("COAM", "Enter experiment name")
-    experiment_identifier = (
-        f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{experiment_name}"
+    os.chdir("resources")
+    part_name = choicebox(
+        "Select part", [Path(file).stem for file in glob.glob("*.stl")]
     )
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    experiment_identifier = f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{part_name}"
     advisor = Advisor(
         space,
         num_objectives=2,
@@ -106,7 +109,9 @@ def main():
     for i in tqdm(range(max_runs)):
         config = advisor.get_suggestion()
         result = generate_cae_and_simulate(
-            config, f"{experiment_identifier}/Iter_{i}_Rot-{config['rotation']}"
+            config,
+            f"{experiment_identifier}/Iter_{i}_Rot-{config['rotation']}",
+            part_name,
         )
         if 0 in result["objectives"]:
             # Optionally resample around the config closely here until one converges, and use that config instead
@@ -121,9 +126,9 @@ def main():
     )
 
 
-def generate_cae_and_simulate(config: dict, path: str):
+def generate_cae_and_simulate(config: dict, path: str, part_name: str):
     Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
-    shutil.copy(f"resources/part_geometry.stl", f"iterations/{path}")
+    shutil.copy(f"resources/{part_name}.stl", f"iterations/{path}/part_geometry.stl")
     # shutil.copy(f"resources/part_geometry.step", f"iterations/{path}")
 
     remesh_simplify_part(f"iterations/{path}/part_geometry.stl", config["rotation"])

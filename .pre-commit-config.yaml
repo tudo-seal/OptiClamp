@@ -22,12 +22,12 @@ repos:
     hooks:
       - id: pyupgrade
         args: [--py310-plus]
-        exclude: ^templates/
+        exclude: ^coam/templates/
   - repo: https://github.com/PyCQA/autoflake
     rev: v1.7.6
     hooks:
       - id: autoflake
-        exclude: ^templates/
+        exclude: ^coam/templates/
         args:
           [
             "--in-place",
@@ -42,9 +42,9 @@ repos:
     hooks:
       - id: isort
         args: ["--profile", "black"]
-        exclude: ^templates/
+        exclude: ^coam/templates/
   - repo: https://github.com/psf/black
     rev: 22.3.0
     hooks:
       - id: black
-        exclude: ^resources/
+        exclude: ^coam/templates/

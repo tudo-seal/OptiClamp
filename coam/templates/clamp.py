@@ -1,10 +1,12 @@
 import json
+import optimization
+import os
+
 
 import visualization
 from abaqus import *
 from abaqusConstants import *
 from mesh import *
-import os
 from optimization import *
 import part
 import interaction
@@ -87,7 +89,7 @@ if os.path.exists("retry.flag"):
             mergeThinStairFaces=False,
             smallFaceAreaThreshold=0.1,
         )
-    except Exception as e:
+    except Exception:
         pass
 
 additive_steel_material = model.Material(name="Stainless_Steel_316L")
@@ -163,12 +165,12 @@ part_geometry.SectionAssignment(
 
 try:
     jaw_actuated.RemoveCells(cellList=jaw_actuated.cells)
-except Exception as e:
+except Exception:
     pass
 
 try:
     jaw_fixed.RemoveCells(cellList=jaw_fixed.cells)
-except Exception as e:
+except Exception:
     pass
 
 
@@ -345,7 +347,7 @@ mdb.jobs[job_name].writeInput()
 mdb.saveAs(str(job_name) + ".cae")
 job.submit()
 job.waitForCompletion()
-file = open("ClampSimulation.log", "r")
+file = open("ClampSimulation.log")
 if not "Abaqus JOB ClampSimulation COMPLETED" in file.read():
     # Try to fix with virtual topology if failed
     file = open("retry.flag", "w")
