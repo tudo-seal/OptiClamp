@@ -1,18 +1,25 @@
 import datetime
+import json
 import os
 import pathlib
 import shutil
+import tkinter.simpledialog
 from pathlib import Path
 
 import cadquery as cq
 import docker
 import OCP.TopoDS
 import pymeshlab
+from OCP.Interface import Interface_Static
 from cadquery import Shape, Workplane
 from jinja2 import Environment, PackageLoader
 from OCP import TopoDS
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
-from OCP.STEPControl import STEPControl_Reader
+from OCP.STEPControl import (
+    STEPControl_Reader,
+    STEPControl_Writer,
+    STEPControl_ManifoldSolidBrep,
+)
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
 from OCP.TopAbs import TopAbs_FACE
@@ -37,12 +44,15 @@ def import_stl_to_cq(filename: str):
     solid = BRepBuilderAPI_MakeSolid(OCP.TopoDS.TopoDS().Shell_s(shape))
     cq_shape = Shape.cast(solid.Shape())
     return cq.Workplane(f"XY").newObject([cq_shape])
-    # writer = STEPControl_Writer()
-    # writer.SetTolerance(1e-2)
-    # Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
-    # Interface_Static.SetCVal_s("write.step.schema", "AP203")
-    # writer.Transfer(shape, STEPControl_ManifoldSolidBrep)
-    # writer.Write(f"{os.path.splitext(filename)[0]}.step")
+
+
+def export_solid_to_step(shape, path):
+    writer = STEPControl_Writer()
+    writer.SetTolerance(1e-4)
+    Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
+    Interface_Static.SetCVal_s("write.step.schema", "AP203")
+    writer.Transfer(shape, STEPControl_ManifoldSolidBrep)
+    writer.Write(path)
 
 
 def import_step_with_markers(file_name: str) -> tuple[Workplane, list[int]]:
@@ -75,19 +85,29 @@ def get_faces_for_ids(face_ids: list[int], part: Workplane):
 
 def main():
     space = sp.Space()
-    rotation = sp.Real("rotation", 0.0, 359.9)
+    rotation = sp.Real("rotation", 0.0, 120)
     space.add_variables([rotation])
-    Optimizer
+    experiment_name = tkinter.simpledialog.askstring("COAM", "Enter experiment name")
+    experiment_identifier = (
+        f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{experiment_name}"
+    )
     advisor = Advisor(
         space,
+        num_objectives=2,
         task_id="OptimizeU",
         surrogate_type="prf",
-        initial_trials=4,  # 2*(dim+1)
+        initial_trials=5,  # 2*(dim+1)
+        init_strategy="sobol",
+        acq_type="ehvi",
+        acq_optimizer_type="local_random",
+        ref_point=[0.25, 250],
     )
-    max_runs = 50
+    max_runs = 55
     for i in tqdm(range(max_runs)):
         config = advisor.get_suggestion()
-        result = generate_cae_and_simulate(config)
+        result = generate_cae_and_simulate(
+            config, f"{experiment_identifier}/Iter_{i}_Rot-{config['rotation']}"
+        )
         if 0 in result["objectives"]:
             # Optionally resample around the config closely here until one converges, and use that config instead
             logger.info("FEM was not stable. Ignoring this iteration.")
@@ -101,13 +121,12 @@ def main():
     )
 
 
-def generate_cae_and_simulate(config: dict):
-    key = f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}" + f"_Rot-{config['rotation']}"
-    Path(f"iterations/{key}").mkdir(parents=True, exist_ok=True)
-    shutil.copy(f"resources/part_geometry.stl", f"iterations/{key}")
-    # shutil.copy(f"resources/part_geometry.step", f"iterations/{key}")
+def generate_cae_and_simulate(config: dict, path: str):
+    Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
+    shutil.copy(f"resources/part_geometry.stl", f"iterations/{path}")
+    # shutil.copy(f"resources/part_geometry.step", f"iterations/{path}")
 
-    remesh_simplify_part(f"iterations/{key}/part_geometry.stl", config["rotation"])
+    remesh_simplify_part(f"iterations/{path}/part_geometry.stl", config["rotation"])
     client = docker.from_env()
     client.images.pull(f"pymesh/pymesh")
     client.containers.run(
@@ -117,26 +136,28 @@ def generate_cae_and_simulate(config: dict):
             "/tmp/minkowski/minkowski.py",
             "part_geometry_simplified.stl",
             f"10.0",
-            f"{key}",
+            f"{path}",
         ],
         volumes={os.getcwd(): {"bind": "/tmp/", f"mode": "rw"}},
         detach=False,
         auto_remove=True,
     )
     ms = pymeshlab.MeshSet()
-    ms.load_new_mesh(f"iterations/{key}/part_geometry_minkowski.stl")
+    ms.load_new_mesh(f"iterations/{path}/part_geometry_minkowski.stl")
     clean_bad_faces(ms)
     ms.meshing_repair_non_manifold_vertices()
     ms.meshing_repair_non_manifold_edges()
-    ms.save_current_mesh(f"iterations/{key}/part_geometry_minkowski.stl")
+    ms.save_current_mesh(f"iterations/{path}/part_geometry_minkowski.stl")
     minkowski_of_part = import_stl_to_cq(
-        f"iterations/{key}/part_geometry_minkowski.stl"
+        f"iterations/{path}/part_geometry_minkowski.stl"
     )
-    simplified_part = import_stl_to_cq(f"iterations/{key}/part_geometry_simplified.stl")
-    # part = cq.importers.importStep(f"iterations/{key}/part_geometry.step")
+    simplified_part = import_stl_to_cq(
+        f"iterations/{path}/part_geometry_simplified.stl"
+    )
+    # part = cq.importers.importStep(f"iterations/{path}/part_geometry.step")
     # part = part.val().rotate((0, 0, 0), (0, 0, 1), config["rotation"])
     # part_box = part.BoundingBox()
-    # part.exportStep(f"iterations/{key}/part_geometry.step")
+    # part.exportStep(f"iterations/{path}/part_geometry.step")
     part_box = minkowski_of_part.val().BoundingBox()
     jaw_actuated = (
         (
@@ -154,33 +175,29 @@ def generate_cae_and_simulate(config: dict):
         )
         - minkowski_of_part
     ).translate((-10, 0, 0))
-    jaw_actuated.val().exportStep(
-        f"iterations/{key}/jaw_actuated.step", write_pcurves=False, precision_mode=1
+    export_solid_to_step(
+        jaw_actuated.val().Solids()[0].wrapped, f"iterations/{path}/jaw_actuated.step"
     )
-    jaw_fixed.val().exportStep(
-        f"iterations/{key}/jaw_fixed.step", write_pcurves=False, precision_mode=1
+    export_solid_to_step(
+        jaw_fixed.val().Solids()[0].wrapped, f"iterations/{path}/jaw_fixed.step"
     )
-    simplified_part.val().exportStep(
-        f"iterations/{key}/part_geometry_simplified.step",
-        write_pcurves=False,
-        precision_mode=1,
+    export_solid_to_step(
+        simplified_part.val().Solids()[0].wrapped,
+        f"iterations/{path}/part_geometry_simplified.step",
     )
-    data = {
-        "cwd": pathlib.Path().resolve().as_posix(),
-        "iteration": f"{key}",
-    }
-    with open(f"iterations/{key}/clamp.py", f"w") as fh:
-        fh.write(env.get_template(f"clamp.py.jinja").render(data))
-    os.chdir(f"iterations/{key}")
+    with open(f"iterations/{path}/clamp.py", f"w") as fh:
+        shutil.copy(f"templates/clamp.py", f"iterations/{path}/clamp.py")
+    os.chdir(f"iterations/{path}")
     os.system(f"abaqus cae nogui=clamp.py")
     if os.path.exists("retry.flag"):
         # One retry with virtual topology for cases with slivered geometry
         os.system(f"abaqus cae nogui=clamp.py")
-    results = open("results.coam")
-    displacement = float(results.read())
-    results.close()
+
+    results = json.load(open("results.coam"))
+    displacement = results["u1"]
+    stress = results["s"]
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    return {"objectives": [displacement]}
+    return {"objectives": [displacement, stress]}
 
 
 def remesh_simplify_part(filename: str, rotation: float):
