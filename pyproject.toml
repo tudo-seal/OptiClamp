@@ -15,7 +15,7 @@ docker = "^7"
 openbox = { extras = ["extra"], version = "^0" }
 
 [tool.poetry.scripts]
-optimize = "coam.coam:main"
+optimize = "coam.run_simulation:main"
 
 [build-system]
 requires = ["poetry-core"]

@@ -211,6 +211,7 @@ migrations/
 *.lck
 *.jnl
 *.simlog
+*.scrap
 simdir/
 *.rec
 iterations/

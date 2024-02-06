@@ -14,6 +14,7 @@ from jinja2 import Environment, PackageLoader
 from OCP import TopoDS
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
 from OCP.Interface import Interface_Static
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_ManifoldSolidBrep,
     STEPControl_Reader,
@@ -42,8 +43,18 @@ def import_stl_to_cq(filename: str):
         exp.Next()
     sew.Perform()
     shape = sew.SewedShape()
-    solid = BRepBuilderAPI_MakeSolid(OCP.TopoDS.TopoDS().Shell_s(shape))
-    cq_shape = Shape.cast(solid.Shape())
+    solid_builder = BRepBuilderAPI_MakeSolid()
+    solid_builder.Add(OCP.TopoDS.TopoDS().Shell_s(shape))
+    solid_builder.Build()
+    solid = solid_builder.Solid()
+
+    shape_upgrade = ShapeUpgrade_UnifySameDomain()
+    shape_upgrade.Initialize(solid)
+    shape_upgrade.SetAngularTolerance(1e-4)
+    shape_upgrade.Build()
+
+    cq_shape = Shape.cast(shape_upgrade.Shape())
+    cq_shape.fix()
     return cq.Workplane(f"XY").newObject([cq_shape])
 
 
@@ -85,6 +96,7 @@ def get_faces_for_ids(face_ids: list[int], part: Workplane):
 
 
 def main():
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
     space = sp.Space()
     rotation = sp.Real("rotation", 0.0, 120)
     space.add_variables([rotation])
@@ -180,6 +192,9 @@ def generate_cae_and_simulate(config: dict, path: str, part_name: str):
         )
         - minkowski_of_part
     ).translate((-10, 0, 0))
+    export_solid_to_step(
+        minkowski_of_part.val().Solids()[0].wrapped, f"iterations/{path}/minkowski.step"
+    )
     export_solid_to_step(
         jaw_actuated.val().Solids()[0].wrapped, f"iterations/{path}/jaw_actuated.step"
     )
