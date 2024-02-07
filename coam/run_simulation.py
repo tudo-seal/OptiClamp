@@ -7,88 +7,21 @@ from pathlib import Path
 
 import cadquery as cq
 import docker
-import OCP.TopoDS
+import igl
 import pymeshlab
-from cadquery import Shape, Workplane
+from cadquery import Workplane
 from jinja2 import Environment, PackageLoader
-from OCP import TopoDS
-from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
-from OCP.Interface import Interface_Static
-from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.STEPControl import (
-    STEPControl_ManifoldSolidBrep,
-    STEPControl_Reader,
-    STEPControl_Writer,
-)
-from OCP.StepShape import StepShape_AdvancedFace
-from OCP.StlAPI import StlAPI
-from OCP.TopAbs import TopAbs_FACE
-from OCP.TopExp import TopExp_Explorer
 from openbox import Advisor, Observation, logger
 from openbox import space as sp
 from tqdm import tqdm
 
 from coam.util.choicebox import choicebox
+from coam.util.geometry_io import export_solid_to_step, import_stl_to_cq
 
 env = Environment(loader=PackageLoader(f"coam", f"templates"))
 
-
-def import_stl_to_cq(filename: str):
-    shape = OCP.TopoDS.TopoDS_Shape()
-    StlAPI.Read_s(shape, filename)
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    sew = BRepBuilderAPI_Sewing()
-    while exp.More():
-        sew.Add(exp.Current())
-        exp.Next()
-    sew.Perform()
-    shape = sew.SewedShape()
-    solid_builder = BRepBuilderAPI_MakeSolid()
-    solid_builder.Add(OCP.TopoDS.TopoDS().Shell_s(shape))
-    solid_builder.Build()
-    solid = solid_builder.Solid()
-
-    shape_upgrade = ShapeUpgrade_UnifySameDomain()
-    shape_upgrade.Initialize(solid)
-    shape_upgrade.SetAngularTolerance(1e-4)
-    shape_upgrade.Build()
-
-    cq_shape = Shape.cast(shape_upgrade.Shape())
-    cq_shape.fix()
-    return cq.Workplane(f"XY").newObject([cq_shape])
-
-
-def export_solid_to_step(shape, path):
-    writer = STEPControl_Writer()
-    writer.SetTolerance(1e-4)
-    Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
-    Interface_Static.SetCVal_s("write.step.schema", "AP203")
-    writer.Transfer(shape, STEPControl_ManifoldSolidBrep)
-    writer.Write(path)
-
-
-def import_step_with_markers(file_name: str) -> tuple[Workplane, list[int]]:
-    reader = STEPControl_Reader()
-    tr = reader.WS().TransferReader()
-    reader.ReadFile(file_name)
-    reader.TransferRoots()
-    shape = reader.OneShape()
-
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    no_intersect_face_hashes = []
-    while exp.More():
-        s: TopoDS.TopoDS_Shape = exp.Current()
-        exp.Next()
-        item: StepShape_AdvancedFace = tr.EntityFromShapeResult(s, 1)
-        if item.Name().ToCString() == "NoIntersect":
-            no_intersect_face_hashes.append(s.HashCode(1000000000))
-    cq_shape = Shape.cast(shape)
-    no_intersect_face_ids = [
-        idx
-        for idx, face, in enumerate(cq_shape.Faces())
-        if face.wrapped.HashCode(1000000000) in no_intersect_face_hashes
-    ]
-    return cq.Workplane(f"XY").newObject([cq_shape]), no_intersect_face_ids
+part_mesh: pymeshlab.MeshSet = None
+part: cq.Workplane = None
 
 
 def get_faces_for_ids(face_ids: list[int], part: Workplane):
@@ -96,7 +29,16 @@ def get_faces_for_ids(face_ids: list[int], part: Workplane):
 
 
 def main():
+    global part_mesh, part
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    part_mesh = remesh_simplify_part(f"resources/p")
+    m: pymeshlab.Mesh = part_mesh.current_mesh()
+    igl
+    m.vertex_matrix()
+    m.face_matrix()
+
+    part_mesh.generate_copy_of_current_mesh()
+
     space = sp.Space()
     rotation = sp.Real("rotation", 0.0, 120)
     space.add_variables([rotation])
@@ -104,7 +46,6 @@ def main():
     part_name = choicebox(
         "Select part", [Path(file).stem for file in glob.glob("*.stl")]
     )
-    os.chdir(os.path.dirname(os.path.realpath(__file__)))
     experiment_identifier = f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{part_name}"
     advisor = Advisor(
         space,
@@ -228,7 +169,6 @@ def remesh_simplify_part(filename: str, rotation: float):
     )
     clean_bad_faces(ms)
     ms.compute_matrix_from_rotation(rotaxis="Z axis", angle=rotation)
-    ms.save_current_mesh(f"{os.path.splitext(filename)[0]}_simplified.stl")
     return ms
 
 

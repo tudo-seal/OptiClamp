@@ -5,6 +5,7 @@ import numpy as np
 # noinspection PyUnresolvedReferences
 import pymesh
 
+# while os.path.exists("tmp/optimize.coam"):
 mesh = pymesh.load_mesh(f"/tmp/iterations/{sys.argv[3]}/{sys.argv[1]}")
 mesh = pymesh.minkowski_sum(
     mesh, np.array([[float(sys.argv[2]), 0, 0], [-float(sys.argv[2]), 0, 0]])
