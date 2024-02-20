@@ -36,7 +36,7 @@ def import_stl_to_cq(filename: str):
 
     shape_upgrade = ShapeUpgrade_UnifySameDomain()
     shape_upgrade.Initialize(solid)
-    shape_upgrade.SetAngularTolerance(1e-4)
+    shape_upgrade.SetAngularTolerance(5e-5)
     shape_upgrade.Build()
 
     cq_shape = Shape.cast(shape_upgrade.Shape())

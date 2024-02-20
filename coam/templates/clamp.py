@@ -46,7 +46,7 @@ jaw_fixed = model.PartFromGeometryFile(
 jaw_fixed = model.parts["jaw_fixed"]
 
 part_geometry_acis = session.openStep(
-    "part_geometry_simplified.step",
+    "part_geometry.step",
     scaleFromFile=OFF,
 )
 part_geometry = model.PartFromGeometryFile(
