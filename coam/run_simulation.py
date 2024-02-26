@@ -17,7 +17,7 @@ from openbox import space as sp
 from tqdm import tqdm
 
 from coam.util.choicebox import choicebox
-from coam.util.geometry_io import export_solid_to_step, import_stl_to_cq
+from coam.util.geometry_io import export_solid_to_step, import_stl_as_shape
 
 env = Environment(loader=PackageLoader(f"coam", f"templates"))
 
@@ -222,8 +222,9 @@ def generate_cae_and_simulate(
     )
     clean_bad_faces(fixed_composite_jaw_meshset)
     fixed_composite_jaw_meshset.save_current_mesh(f"iterations/{path}/jaw_fixed.stl")
-    composite_actuated_jaw = import_stl_to_cq(f"iterations/{path}/jaw_actuated.stl")
-    composite_fixed_jaw = import_stl_to_cq(f"iterations/{path}/jaw_fixed.stl")
+    composite_actuated_jaw = import_stl_as_shape(f"iterations/{path}/jaw_actuated.stl")
+
+    composite_fixed_jaw = import_stl_as_shape(f"iterations/{path}/jaw_fixed.stl")
     displacements = []
     for i in range(len(cut_depths)):
         Path(f"iterations/{path}/{i}").mkdir(parents=True, exist_ok=True)
@@ -241,9 +242,9 @@ def generate_cae_and_simulate(
             .wrapped,
             f"iterations/{path}/{i}/jaw_fixed.step",
         )
-        part = import_stl_to_cq(f"iterations/{path}/part_geometry_{i}.stl")
+        part_brep = import_stl_as_shape(f"iterations/{path}/part_geometry_{i}.stl")
         export_solid_to_step(
-            part.val().Solids()[0].wrapped,
+            part_brep.val().Solids()[0].wrapped,
             f"iterations/{path}/{i}/part_geometry.step",
         )
         shutil.copy(f"templates/clamp.py", f"iterations/{path}/{i}/clamp.py")

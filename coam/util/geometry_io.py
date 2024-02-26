@@ -7,7 +7,6 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.gp import gp_Vec
 from OCP.Interface import Interface_Static
-from OCP.ShapeFix import ShapeFix_Face, ShapeFix_Shape, ShapeFix_Wireframe
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_ManifoldSolidBrep,
@@ -16,31 +15,40 @@ from OCP.STEPControl import (
 )
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
-from OCP.TopAbs import TopAbs_FACE
+from OCP.TopAbs import TopAbs_FACE, TopAbs_ShapeEnum
 from OCP.TopExp import TopExp_Explorer
+from OCP.TopoDS import TopoDS_Iterator
 
 
-def import_stl_to_cq(filename: str):
+def import_stl_as_shape(filename: str):
     shape = OCP.TopoDS.TopoDS_Shape()
     StlAPI.Read_s(shape, filename)
     sew = BRepBuilderAPI_Sewing()
-    sew.SetTolerance(2e-5)
+    # sew.SetTolerance(1e-4)
     sew.Add(shape)
     sew.Perform()
-    shape = sew.SewedShape()
+    shape: OCP.TopoDS.TopoDS_Shape = sew.SewedShape()
+    if shape.IsNull():
+        raise Exception("Critical error, STL could not be sewn into a shape.")
+    if shape.ShapeType() == TopAbs_ShapeEnum.TopAbs_COMPOUND:
+        print(
+            "Shape is a compound for reasons unknown, checking if it contains exactly one Solid"
+        )
+        iterator = TopoDS_Iterator(shape)
+        solid_already_found = False
+        while iterator.More():
+            if iterator.Value().ShapeType() != TopAbs_ShapeEnum.TopAbs_SOLID:
+                continue
+            if solid_already_found:
+                raise Exception("Critical error, more than one sewn solid")
+            solid_already_found = True
+            shape = iterator.Value()
+            iterator.Next()
 
-    shape_fix = ShapeFix_Shape(shape)
-    shape_fix.FixVertexPositionMode = True
-    face_tool: ShapeFix_Face = shape_fix.FixFaceTool()
-    face_tool.FixSmallAreaWireMode = True
-    shape_fix.Perform()
-    wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
-    wire_fix.ModeDropSmallEdges = True
-    wire_fix.FixSmallEdges()
-    wire_fix.FixWireGaps()
+    solid_builder = BRepBuilderAPI_MakeSolid(OCP.TopoDS.TopoDS().Shell_s(shape))
+    solid_builder.Build()
 
-    shape_upgrade = ShapeUpgrade_UnifySameDomain()
-    shape_upgrade.Initialize(wire_fix.Shape())
+    shape_upgrade = ShapeUpgrade_UnifySameDomain(solid_builder.Shape())
     # The value of these are very important
     # Too large leads to geometry degenerating in some cases, wrongly failing FEM
     # Too small does not recover much topology, and too small linear can lead to invalid STEPs that abaqus can not facet
@@ -49,21 +57,7 @@ def import_stl_to_cq(filename: str):
     shape_upgrade.SetLinearTolerance(2e-4)
     shape_upgrade.Build()
 
-    solid_builder = BRepBuilderAPI_MakeSolid()
-    solid_builder.Add(OCP.TopoDS.TopoDS().Shell_s(shape_upgrade.Shape()))
-    solid_builder.Build()
-
-    shape_fix = ShapeFix_Shape(solid_builder.Shape())
-    shape_fix.FixVertexPositionMode = True
-    face_tool: ShapeFix_Face = shape_fix.FixFaceTool()
-    face_tool.FixSmallAreaWireMode = True
-    shape_fix.Perform()
-    wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
-    wire_fix.ModeDropSmallEdges = True
-    wire_fix.FixSmallEdges()
-    wire_fix.FixWireGaps()
-
-    cq_shape = Shape.cast(wire_fix.Shape())
+    cq_shape = Shape.cast(shape_upgrade.Shape())
     return cq.Workplane(f"XY").newObject([cq_shape])
 
 
