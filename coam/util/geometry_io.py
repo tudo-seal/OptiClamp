@@ -7,6 +7,7 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.gp import gp_Vec
 from OCP.Interface import Interface_Static
+from OCP.ShapeFix import ShapeFix_Face, ShapeFix_Shape, ShapeFix_Wireframe
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_ManifoldSolidBrep,
@@ -22,31 +23,57 @@ from OCP.TopExp import TopExp_Explorer
 def import_stl_to_cq(filename: str):
     shape = OCP.TopoDS.TopoDS_Shape()
     StlAPI.Read_s(shape, filename)
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
     sew = BRepBuilderAPI_Sewing()
-    while exp.More():
-        sew.Add(exp.Current())
-        exp.Next()
+    sew.SetTolerance(2e-5)
+    sew.Add(shape)
     sew.Perform()
     shape = sew.SewedShape()
-    solid_builder = BRepBuilderAPI_MakeSolid()
-    solid_builder.Add(OCP.TopoDS.TopoDS().Shell_s(shape))
-    solid_builder.Build()
-    solid = solid_builder.Solid()
+
+    shape_fix = ShapeFix_Shape(shape)
+    shape_fix.FixVertexPositionMode = True
+    face_tool: ShapeFix_Face = shape_fix.FixFaceTool()
+    face_tool.FixSmallAreaWireMode = True
+    shape_fix.Perform()
+    wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
+    wire_fix.ModeDropSmallEdges = True
+    wire_fix.FixSmallEdges()
+    wire_fix.FixWireGaps()
 
     shape_upgrade = ShapeUpgrade_UnifySameDomain()
-    shape_upgrade.Initialize(solid)
-    shape_upgrade.SetAngularTolerance(5e-5)
+    shape_upgrade.Initialize(wire_fix.Shape())
+    # The value of these are very important
+    # Too large leads to geometry degenerating in some cases, wrongly failing FEM
+    # Too small does not recover much topology, and too small linear can lead to invalid STEPs that abaqus can not facet
+    # Current value works well in all cases observed so far (obtained by manual binary search)
+    shape_upgrade.SetAngularTolerance(2e-5)
+    shape_upgrade.SetLinearTolerance(2e-4)
     shape_upgrade.Build()
 
-    cq_shape = Shape.cast(shape_upgrade.Shape())
-    cq_shape.fix()
+    solid_builder = BRepBuilderAPI_MakeSolid()
+    solid_builder.Add(OCP.TopoDS.TopoDS().Shell_s(shape_upgrade.Shape()))
+    solid_builder.Build()
+
+    shape_fix = ShapeFix_Shape(solid_builder.Shape())
+    shape_fix.FixVertexPositionMode = True
+    face_tool: ShapeFix_Face = shape_fix.FixFaceTool()
+    face_tool.FixSmallAreaWireMode = True
+    shape_fix.Perform()
+    wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
+    wire_fix.ModeDropSmallEdges = True
+    wire_fix.FixSmallEdges()
+    wire_fix.FixWireGaps()
+
+    cq_shape = Shape.cast(wire_fix.Shape())
     return cq.Workplane(f"XY").newObject([cq_shape])
 
 
 def export_solid_to_step(shape, path):
     writer = STEPControl_Writer()
-    writer.SetTolerance(1e-4)
+    # The Tolerance has a large effect on the speed and success of the FEMs
+    # Too large can cause imprecise geometry errors or lead to slight clipping and over-closures needing to be resolved
+    # Too small previously lead to zero elements occurring, this might be fixed by switching to pymesh boolean ops.
+    # Current value works well though and leads to a fast FEM
+    # writer.SetTolerance(1e-6)
     Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
     Interface_Static.SetCVal_s("write.step.schema", "AP203")
     writer.Transfer(shape, STEPControl_ManifoldSolidBrep)

@@ -31,6 +31,10 @@ jaw_actuated = model.PartFromGeometryFile(
     type=DISCRETE_RIGID_SURFACE,
 )
 jaw_actuated = model.parts["jaw_actuated"]
+if not jaw_actuated.geometryValidity:
+    jaw_actuated.setValues(geometryValidity=True)
+    file = open("retry.flag", "w")
+    file.close()
 
 jaw_fixed_acis = session.openStep(
     "jaw_fixed.step",
@@ -44,6 +48,10 @@ jaw_fixed = model.PartFromGeometryFile(
     type=DISCRETE_RIGID_SURFACE,
 )
 jaw_fixed = model.parts["jaw_fixed"]
+if not jaw_fixed.geometryValidity:
+    jaw_fixed.setValues(geometryValidity=True)
+    file = open("retry.flag", "w")
+    file.close()
 
 part_geometry_acis = session.openStep(
     "part_geometry.step",
@@ -57,6 +65,13 @@ part_geometry = model.PartFromGeometryFile(
     type=DEFORMABLE_BODY,
 )
 part_geometry = model.parts["part_geometry"]
+if not part_geometry.geometryValidity:
+    part_geometry.setValues(geometryValidity=True)
+    file = open("retry.flag", "w")
+    file.close()
+
+# Having to set any validity manually necessitates virtual topology to mesh the whole part
+# So no retry is needed
 
 reference_point_load = jaw_actuated.ReferencePoint(point=(-10.0, 0.0, 0.0))
 reference_point_static = jaw_fixed.ReferencePoint(point=(10.0, 0.0, 0.0))
@@ -67,27 +82,34 @@ part_geometry.Surface(name="Surface", side1Faces=part_geometry.faces)
 
 if os.path.exists("retry.flag"):
     try:
+        os.remove("retry.flag")
         jaw_fixed.createVirtualTopology(
             applyBlendControls=False,
+            blendSubtendedAngleTolerance=60.0,
             cornerAngleTolerance=30.0,
-            ignoreRedundantEntities=False,
+            faceAspectRatioThreshold=10.0,
+            ignoreRedundantEntities=True,
             mergeShortEdges=False,
-            mergeSliverFaces=False,
-            mergeSmallAngleFaces=False,
-            mergeSmallFaces=True,
-            mergeThinStairFaces=False,
-            smallFaceAreaThreshold=0.1,
+            mergeSliverFaces=True,
+            mergeSmallAngleFaces=True,
+            mergeSmallFaces=False,
+            mergeThinStairFaces=True,
+            smallFaceCornerAngleThreshold=10.0,
+            thinStairFaceThreshold=0.12,
         )
         jaw_actuated.createVirtualTopology(
             applyBlendControls=False,
+            blendSubtendedAngleTolerance=60.0,
             cornerAngleTolerance=30.0,
-            ignoreRedundantEntities=False,
+            faceAspectRatioThreshold=10.0,
+            ignoreRedundantEntities=True,
             mergeShortEdges=False,
-            mergeSliverFaces=False,
-            mergeSmallAngleFaces=False,
-            mergeSmallFaces=True,
-            mergeThinStairFaces=False,
-            smallFaceAreaThreshold=0.1,
+            mergeSliverFaces=True,
+            mergeSmallAngleFaces=True,
+            mergeSmallFaces=False,
+            mergeThinStairFaces=True,
+            smallFaceCornerAngleThreshold=10.0,
+            thinStairFaceThreshold=0.12,
         )
     except Exception:
         pass
@@ -202,12 +224,15 @@ jaw_actuated_instance = model.rootAssembly.Instance(
 jaw_fixed_instance = model.rootAssembly.Instance(
     dependent=ON, name="jaw_fixed-1", part=jaw_fixed
 )
+
 jaw_actuated_instance_set = model.rootAssembly.Set(
-    name="jaw_actuated_Set", referencePoints=(jaw_actuated_instance.referencePoints[2],)
+    name="jaw_actuated_Set",
+    referencePoints=(jaw_actuated_instance.referencePoints.values()[0],),
 )
 
 jaw_fixed_instance_set = model.rootAssembly.Set(
-    name="jaw_fixed_Set", referencePoints=(jaw_fixed_instance.referencePoints[2],)
+    name="jaw_fixed_Set",
+    referencePoints=(jaw_fixed_instance.referencePoints.values()[0],),
 )
 
 model.rootAssembly.regenerate()
@@ -315,7 +340,8 @@ global_contact.initializationAssignments.appendInStep(
 #                       meshedGeometrySearchTechnique=USE_MESH)
 
 clamping_set = model.rootAssembly.Set(
-    name="Clamping-Load", referencePoints=(jaw_actuated_instance.referencePoints[2],)
+    name="Clamping-Load",
+    referencePoints=(jaw_actuated_instance.referencePoints.values()[0],),
 )
 
 model.ConcentratedForce(
