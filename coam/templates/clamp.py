@@ -260,25 +260,18 @@ model.EncastreBC(
     region=jaw_fixed_instance_set,
 )
 
-model.XasymmBC(
-    createStepName="Initial",
-    localCsys=None,
-    name="BC-jaw_actuated",
-    region=jaw_actuated_instance_set,
-)
-
 model.DisplacementBC(
     amplitude=UNSET,
     createStepName="Initial",
     distributionType=UNIFORM,
     fieldName="",
     localCsys=None,
-    name="BC-3",
+    name="BC-jaw_actuated",
     region=jaw_actuated_instance_set,
     u1=UNSET,
-    u2=UNSET,
-    u3=UNSET,
-    ur1=UNSET,
+    u2=SET,
+    u3=SET,
+    ur1=SET,
     ur2=SET,
     ur3=SET,
 )

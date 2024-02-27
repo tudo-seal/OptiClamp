@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import shutil
+import subprocess
 import tkinter.simpledialog
 from pathlib import Path
 
@@ -249,10 +250,32 @@ def generate_cae_and_simulate(
         )
         shutil.copy(f"templates/clamp.py", f"iterations/{path}/{i}/clamp.py")
         os.chdir(f"iterations/{path}/{i}")
-        os.system(f"abaqus cae nogui=clamp.py")
+        try:
+            process = subprocess.Popen(["abaqus", "cae", "nogui=clamp.py"], shell=True)
+            process.wait(timeout=600)
+        except subprocess.TimeoutExpired:
+            os.system(f"TASKKILL /F /PID {process.pid} /T")
+            logger.info(
+                "FEM ran far longer than expected. Retrying with virtual geometry."
+            )
+            file = open("retry.flag", "w")
+            file.close()
         if os.path.exists("retry.flag"):
             # One retry with virtual topology for cases with slivered geometry
-            os.system(f"abaqus cae nogui=clamp.py")
+            try:
+                process = subprocess.Popen(
+                    ["abaqus", "cae", "nogui=clamp.py"],
+                    shell=True,
+                )
+                process.wait(timeout=600)
+            except subprocess.TimeoutExpired:
+                os.system(f"TASKKILL /F /PID {process.pid} /T")
+                logger.info(
+                    "FEM ran longer than expected even with virtual geometry. Assuming that geometry is not feasible."
+                )
+                displacements.append(0)
+                os.chdir(os.path.dirname(os.path.realpath(__file__)))
+                break
         results = json.load(open("results.coam"))
         displacements.append(results["u1"])
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
