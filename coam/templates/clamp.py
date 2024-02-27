@@ -309,7 +309,9 @@ global_contact.includedPairs.setValuesInStep(
     stepName="Initial",
     useAllstar=OFF,
 )
-model.StdInitialization(name="ContactInitialization")
+model.StdInitialization(
+    name="ContactInitialization", overclosureTolerance=0.1, overclosureType=ADJUST
+)
 global_contact.initializationAssignments.appendInStep(
     assignments=(
         (
