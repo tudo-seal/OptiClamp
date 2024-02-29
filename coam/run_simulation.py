@@ -75,14 +75,14 @@ def main():
         num_objectives=num_parts,
         task_id=experiment_name,
         surrogate_type="prf",
-        initial_trials=6,  # 2*(dim+1)
+        initial_trials=9,  # 2*(dim+1)
         init_strategy="sobol",
         acq_type="ehvi",
         acq_optimizer_type="local_random",
         ref_point=[max_value] * num_parts,
         rand_prob=0.2,
     )
-    max_runs = 56
+    max_runs = 59
     client = docker.from_env()
     client.images.pull(f"pymesh/pymesh")
 
