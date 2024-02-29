@@ -28,7 +28,7 @@ jaw_actuated = model.PartFromGeometryFile(
     dimensionality=THREE_D,
     geometryFile=jaw_actuated_acis,
     name="jaw_actuated",
-    type=DISCRETE_RIGID_SURFACE,
+    type=DEFORMABLE_BODY,
 )
 jaw_actuated = model.parts["jaw_actuated"]
 if not jaw_actuated.geometryValidity:
@@ -45,7 +45,7 @@ jaw_fixed = model.PartFromGeometryFile(
     dimensionality=THREE_D,
     geometryFile=jaw_fixed_acis,
     name="jaw_fixed",
-    type=DISCRETE_RIGID_SURFACE,
+    type=DEFORMABLE_BODY,
 )
 jaw_fixed = model.parts["jaw_fixed"]
 if not jaw_fixed.geometryValidity:
@@ -80,41 +80,6 @@ jaw_actuated.Surface(name="Surface", side1Faces=jaw_actuated.faces)
 jaw_fixed.Surface(name="Surface", side1Faces=jaw_fixed.faces)
 part_geometry.Surface(name="Surface", side1Faces=part_geometry.faces)
 
-if os.path.exists("retry.flag"):
-    try:
-        os.remove("retry.flag")
-        jaw_fixed.createVirtualTopology(
-            applyBlendControls=False,
-            cornerAngleTolerance=30.0,
-            faceAspectRatioThreshold=10.0,
-            ignoreRedundantEntities=True,
-            mergeShortEdges=True,
-            mergeSliverFaces=True,
-            mergeSmallAngleFaces=True,
-            mergeSmallFaces=True,
-            mergeThinStairFaces=True,
-            shortEdgeThreshold=0.1,
-            smallFaceAreaThreshold=0.1,
-            smallFaceCornerAngleThreshold=25.0,
-            thinStairFaceThreshold=0.12,
-        )
-        jaw_actuated.createVirtualTopology(
-            applyBlendControls=False,
-            cornerAngleTolerance=30.0,
-            faceAspectRatioThreshold=10.0,
-            ignoreRedundantEntities=True,
-            mergeShortEdges=True,
-            mergeSliverFaces=True,
-            mergeSmallAngleFaces=True,
-            mergeSmallFaces=True,
-            mergeThinStairFaces=True,
-            shortEdgeThreshold=0.1,
-            smallFaceAreaThreshold=0.1,
-            smallFaceCornerAngleThreshold=25.0,
-            thinStairFaceThreshold=0.12,
-        )
-    except Exception:
-        pass
 
 additive_steel_material = model.Material(name="Stainless_Steel_316L")
 additive_steel_material.setValues(description="")
@@ -178,6 +143,14 @@ part_set = part_geometry.Set(
     cells=part_geometry.cells,
     name="part-set",
 )
+jaw_actuated_set = jaw_actuated.Set(
+    cells=jaw_actuated.cells,
+    name="jaw_actuated-set",
+)
+jaw_fixed_set = jaw_fixed.Set(
+    cells=jaw_fixed.cells,
+    name="jaw_fixed-set",
+)
 part_geometry.SectionAssignment(
     offset=0.0,
     offsetField="",
@@ -186,16 +159,22 @@ part_geometry.SectionAssignment(
     sectionName="part-section",
     thicknessAssignment=FROM_SECTION,
 )
-
-try:
-    jaw_actuated.RemoveCells(cellList=jaw_actuated.cells)
-except Exception:
-    pass
-
-try:
-    jaw_fixed.RemoveCells(cellList=jaw_fixed.cells)
-except Exception:
-    pass
+jaw_actuated.SectionAssignment(
+    offset=0.0,
+    offsetField="",
+    offsetType=MIDDLE_SURFACE,
+    region=jaw_actuated_set,
+    sectionName="actuated-section",
+    thicknessAssignment=FROM_SECTION,
+)
+jaw_fixed.SectionAssignment(
+    offset=0.0,
+    offsetField="",
+    offsetType=MIDDLE_SURFACE,
+    region=jaw_fixed_set,
+    sectionName="fixed-section",
+    thicknessAssignment=FROM_SECTION,
+)
 
 
 part_geometry.setMeshControls(
@@ -207,14 +186,28 @@ part_geometry.setElementType(
     elemTypes=(ElemType(elemCode=C3D10, elemLibrary=STANDARD),),
     regions=part_set,
 )
+jaw_actuated.setMeshControls(
+    elemShape=TET, regions=jaw_actuated.cells, technique=FREE, sizeGrowth=MAXIMUM
+)
+jaw_actuated.setElementType(
+    elemTypes=(ElemType(elemCode=C3D10, elemLibrary=STANDARD),),
+    regions=jaw_actuated_set,
+)
+jaw_fixed.setMeshControls(
+    elemShape=TET, regions=jaw_fixed.cells, technique=FREE, sizeGrowth=MAXIMUM
+)
+jaw_fixed.setElementType(
+    elemTypes=(ElemType(elemCode=C3D10, elemLibrary=STANDARD),),
+    regions=jaw_fixed_set,
+)
 
 part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 part_geometry.generateMesh()
 
-jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=500)
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5)
 jaw_actuated.generateMesh()
 
-jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=500)
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5)
 jaw_fixed.generateMesh()
 
 part_instance = model.rootAssembly.Instance(
@@ -227,32 +220,56 @@ jaw_fixed_instance = model.rootAssembly.Instance(
     dependent=ON, name="jaw_fixed-1", part=jaw_fixed
 )
 
+part_instance_set = model.rootAssembly.Set(
+    name="jaw_actuated_Set",
+    cells=part_instance.cells,
+)
+
 jaw_actuated_instance_set = model.rootAssembly.Set(
     name="jaw_actuated_Set",
-    referencePoints=(jaw_actuated_instance.referencePoints.values()[0],),
+    cells=jaw_actuated_instance.cells,
 )
 
 jaw_fixed_instance_set = model.rootAssembly.Set(
     name="jaw_fixed_Set",
-    referencePoints=(jaw_fixed_instance.referencePoints.values()[0],),
+    cells=jaw_fixed_instance.cells,
+)
+
+model.RigidBody(
+    bodyRegion=jaw_actuated_instance_set,
+    name="jaw_actuated_Rigid",
+    refPointRegion=Region(
+        referencePoints=(jaw_actuated_instance.referencePoints.values()[0],)
+    ),
+    refPointAtCOM=ON,
+)
+model.RigidBody(
+    bodyRegion=jaw_fixed_instance_set,
+    name="jaw_fixed_Rigid",
+    refPointRegion=Region(
+        referencePoints=(jaw_fixed_instance.referencePoints.values()[0],)
+    ),
+    refPointAtCOM=ON,
 )
 
 model.rootAssembly.regenerate()
-model.StaticStep(
+analysis_step = model.StaticStep(
     initialInc=1,
     maxInc=1,
-    maxNumInc=10000,
+    maxNumInc=100,
     minInc=1e-10,
     name="Apply-Force",
     nlgeom=ON,
     previous="Initial",
 )
+analysis_step.control.setValues(
+    allowPropagation=OFF,
+    resetDefaultValues=OFF,
+    timeIncrementation=(4.0, 8.0, 9.0, 16.0, 10.0, 4.0, 12.0, 8.0, 6.0, 3.0, 50.0),
+)
 
 model.fieldOutputRequests["F-Output-1"].setValues(
-    variables=(
-        "S",
-        "U",
-    ),
+    variables=("U",),
 )
 
 model.EncastreBC(
@@ -289,7 +306,7 @@ model.interactionProperties["IntProp-Fric"].TangentialBehavior(
     pressureDependency=OFF,
     shearStressLimit=None,
     slipRateDependency=OFF,
-    table=((0.24,),),
+    table=((0.685,),),
     temperatureDependency=OFF,
 )
 model.interactionProperties["IntProp-Fric"].NormalBehavior(
@@ -309,8 +326,40 @@ global_contact.includedPairs.setValuesInStep(
     stepName="Initial",
     useAllstar=OFF,
 )
+global_contact.mainSecondaryAssignments.appendInStep(
+    assignments=(
+        (
+            jaw_actuated_instance.surfaces["Surface"],
+            part_instance.surfaces["Surface"],
+            MAIN,
+        ),
+        (
+            jaw_fixed_instance.surfaces["Surface"],
+            part_instance.surfaces["Surface"],
+            MAIN,
+        ),
+    ),
+    stepName="Initial",
+)
+
+global_contact.slidingFormulationAssignments.appendInStep(
+    assignments=(
+        (
+            jaw_actuated_instance.surfaces["Surface"],
+            part_instance.surfaces["Surface"],
+            SMALL_SLIDING,
+        ),
+        (
+            jaw_fixed_instance.surfaces["Surface"],
+            part_instance.surfaces["Surface"],
+            SMALL_SLIDING,
+        ),
+    ),
+    stepName="Initial",
+)
+
 model.StdInitialization(
-    name="ContactInitialization", overclosureTolerance=0.1, overclosureType=ADJUST
+    name="ContactInitialization", overclosureTolerance=0.2, overclosureType=ADJUST
 )
 global_contact.initializationAssignments.appendInStep(
     assignments=(
@@ -327,14 +376,6 @@ global_contact.initializationAssignments.appendInStep(
     ),
     stepName="Initial",
 )
-
-# This makes the FEM run faster I think if it works
-# model.contactDetection(interactionProperty="IntProp-Fric", separationTolerance=0.0, extendByAngle=None,
-#                       includeMeshShell=ON, includeMeshSolid=ON, includeMeshMembrane=ON,
-#                       includeNonOverlapping=OFF, createUnionOfMainSecondarySurfaces=ON, createUnionOfMainSurfaces=ON,
-#                       createUnionOfSecondarySurfaces=ON,
-#                       includeOverclosed=OFF, mergeWithinAngle=None,
-#                       meshedGeometrySearchTechnique=USE_MESH)
 
 clamping_set = model.rootAssembly.Set(
     name="Clamping-Load",
@@ -370,11 +411,9 @@ mdb.jobs[job_name].writeInput()
 mdb.saveAs(str(job_name) + ".cae")
 job.submit()
 job.waitForCompletion()
+
 file = open("ClampSimulation.log")
 if not "Abaqus JOB ClampSimulation COMPLETED" in file.read():
-    # Try to fix with virtual topology if failed
-    file = open("retry.flag", "w")
-    file.close()
     file = open("results.coam", "w")
     file.write(json.dumps({"u1": 0, "s": 0}))
     file.close()
@@ -383,20 +422,13 @@ if not "Abaqus JOB ClampSimulation COMPLETED" in file.read():
 odb = visualization.openOdb(str(job_name) + ".odb")
 frame = odb.steps["Apply-Force"].frames[-1]
 max_u1 = 0
-max_stress = 0
+max_stress = 10
 
 dispField = frame.fieldOutputs["U"]
 for i in range(len(dispField.values)):
-    u1 = dispField.values[i].data[0]
+    u1 = abs(dispField.values[i].data[0])
     max_u1 = u1 if u1 > max_u1 else max_u1
-
-dispField = frame.fieldOutputs["S"]
-for i in range(len(dispField.values)):
-    stress = dispField.values[i].data[0]
-    max_stress = stress if stress > max_stress else max_stress
 
 file = open("results.coam", "w")
 file.write(json.dumps({"u1": float(max_u1), "s": float(max_stress)}))
 file.close()
-
-# print(dispField)

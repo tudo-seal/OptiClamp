@@ -32,6 +32,8 @@ class ChoiceBox:
 
         btn_1 = tkinter.Button(frm_2, width=8, text=b1)
         btn_1["command"] = self.b1_action
+        root.bind("<Return>", self.b1_action)
+        btn_1.focus_set()
         btn_1.pack()
         if not entry:
             btn_1.focus_set()

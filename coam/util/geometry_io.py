@@ -7,6 +7,7 @@ from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.gp import gp_Vec
 from OCP.Interface import Interface_Static
+from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Wireframe
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.STEPControl import (
     STEPControl_ManifoldSolidBrep,
@@ -15,9 +16,8 @@ from OCP.STEPControl import (
 )
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
-from OCP.TopAbs import TopAbs_FACE, TopAbs_ShapeEnum
+from OCP.TopAbs import TopAbs_FACE, TopAbs_ShapeEnum, TopAbs_SHELL
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS_Iterator
 
 
 def import_stl_as_shape(filename: str):
@@ -31,19 +31,17 @@ def import_stl_as_shape(filename: str):
     if shape.IsNull():
         raise Exception("Critical error, STL could not be sewn into a shape.")
     if shape.ShapeType() == TopAbs_ShapeEnum.TopAbs_COMPOUND:
-        print(
-            "Shape is a compound for reasons unknown, checking if it contains exactly one Solid"
-        )
-        iterator = TopoDS_Iterator(shape)
-        solid_already_found = False
+        print("Shape is a compound, finding largest shell.")
+        iterator = TopExp_Explorer(shape, TopAbs_SHELL)
+        max_children = 0
         while iterator.More():
-            if iterator.Value().ShapeType() != TopAbs_ShapeEnum.TopAbs_SOLID:
-                continue
-            if solid_already_found:
-                raise Exception("Critical error, more than one sewn solid")
-            solid_already_found = True
-            shape = iterator.Value()
+            print(f"Children: {iterator.Current().NbChildren()}")
+            if iterator.Current().NbChildren() > max_children:
+                max_children = iterator.Current().NbChildren()
+                shape = iterator.Current()
             iterator.Next()
+        if max_children == 0:
+            raise Exception("Critical error, no shell had any content.")
 
     solid_builder = BRepBuilderAPI_MakeSolid(OCP.TopoDS.TopoDS().Shell_s(shape))
     solid_builder.Build()
@@ -53,11 +51,27 @@ def import_stl_as_shape(filename: str):
     # Too large leads to geometry degenerating in some cases, wrongly failing FEM
     # Too small does not recover much topology, and too small linear can lead to invalid STEPs that abaqus can not facet
     # Current value works well in all cases observed so far (obtained by manual binary search)
-    shape_upgrade.SetAngularTolerance(2e-5)
+    shape_upgrade.SetAngularTolerance(4e-5)
     shape_upgrade.SetLinearTolerance(2e-4)
     shape_upgrade.Build()
 
-    cq_shape = Shape.cast(shape_upgrade.Shape())
+    shape_fix = ShapeFix_Shape(shape_upgrade.Shape())
+    # shape_fix.FixVertexPositionMode = True
+    # face_tool = shape_fix.FixFaceTool()
+    # face_tool.FixSmallAreaWireMode = True
+    shape_fix.Perform()
+    wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
+    wire_fix.ModeDropSmallEdges = True
+    wire_fix.FixSmallEdges()
+    wire_fix.FixWireGaps()
+    shape = wire_fix.Shape()
+
+    if shape.ShapeType() == TopAbs_ShapeEnum.TopAbs_SHELL:
+        solid_builder = BRepBuilderAPI_MakeSolid(OCP.TopoDS.TopoDS().Shell_s(shape))
+        solid_builder.Build()
+        shape = solid_builder.Shape()
+
+    cq_shape = Shape.cast(shape)
     return cq.Workplane(f"XY").newObject([cq_shape])
 
 

@@ -1,4 +1,3 @@
-import copy
 import datetime
 import glob
 import json
@@ -6,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tkinter.simpledialog
+from functools import reduce
 from pathlib import Path
 
 import cadquery as cq
@@ -42,40 +42,50 @@ def main():
     rotations = []
     mesh_sets = []
     cut_depths = []
+    part_names = []
     for i in range(num_parts):
         rotations.append(sp.Real(f"rotation_{i}", 0.0, 360))
         os.chdir("resources")
         part_name = choicebox(
-            "Select part", [Path(file).stem for file in glob.glob("*.stl")]
+            "Select part",
+            [
+                Path(file).stem
+                for file in glob.glob("*.stl")
+                if Path(file).stem not in part_names
+            ],
         )
+        part_names.append(part_name)
         cut_depths.append(
             tkinter.simpledialog.askinteger(
                 "Cut Depth",
                 "Input a cut depth for orientation: ",
-                initialvalue=(i + 1) * 5,
+                initialvalue=(i + 1) * 3,
             )
         )
         mesh_set = remesh_simplify_part(f"{part_name}.stl")
         mesh_sets.append(mesh_set)
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
     space.add_variables(rotations)
-
     experiment_identifier = (
         f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{experiment_name}"
     )
+    max_value = 0.25
     advisor = Advisor(
         space,
-        num_objectives=2,
+        num_objectives=num_parts,
         task_id=experiment_name,
         surrogate_type="prf",
-        initial_trials=17,  # 2*(dim+1)
+        initial_trials=6,  # 2*(dim+1)
         init_strategy="sobol",
         acq_type="ehvi",
         acq_optimizer_type="local_random",
-        ref_point=[0.25, 0.25],
+        ref_point=[max_value] * num_parts,
         rand_prob=0.2,
     )
-    max_runs = 67
+    max_runs = 56
+    client = docker.from_env()
+    client.images.pull(f"pymesh/pymesh")
+
     for i in tqdm(range(max_runs)):
         config = advisor.get_suggestion()
         print()
@@ -84,34 +94,34 @@ def main():
             config, f"{experiment_identifier}/Iter_{i}", mesh_sets, cut_depths
         )
         # Resample if that was numerically not stable (perhaps overkill, but we like being very safe)
-        failed_fem_indexes = [
-            index
-            for index, objective in enumerate(result["objectives"])
-            if objective == 0
-        ]
-        if len(failed_fem_indexes) > 0:
-            new_config = copy.deepcopy(config)
-            for j in failed_fem_indexes:
-                new_config[f"rotation_{j}"] += 0.1
-
-            logger.info(
-                f"FEM was not stable for orientation {j}. Resampling close to this iteration."
-            )
-            logger.info(f"New config is: {new_config}")
-            result = generate_cae_and_simulate(
-                new_config,
-                f"{experiment_identifier}/Iter_{i}_Retry",
-                mesh_sets,
-                cut_depths,
-            )
+        # failed_fem_indexes = [
+        #     index
+        #     for index, objective in enumerate(result["objectives"])
+        #     if objective == 0
+        # ]
+        # if len(failed_fem_indexes) > 0:
+        #     new_config = copy.deepcopy(config)
+        #     for j in failed_fem_indexes:
+        #         new_config[f"rotation_{j}"] += 0.1
+        #
+        #     logger.info(
+        #         f"FEM was not stable for orientation {j}. Resampling close to this iteration."
+        #     )
+        #     logger.info(f"New config is: {new_config}")
+        #     result = generate_cae_and_simulate(
+        #         new_config,
+        #         f"{experiment_identifier}/Iter_{i}_Retry",
+        #         mesh_sets,
+        #         cut_depths,
+        #     )
         # We are sufficiently sure that this is an issue with the actual rotation, leading to no contact
-        if 0 in result["objectives"]:
+        for j, objective in enumerate(result["objectives"]):
+            if objective != 0:
+                continue
             logger.info(
-                f"FEM was not stable for orientation. Assuming this geometry is not feasible."
+                f"FEM was not stable for orientation {j}. Setting to maximum displacement ({max_value})."
             )
-            observation = Observation(config=config, objectives=[999999] * num_parts)
-            advisor.update_observation(observation)
-            continue
+            result["objectives"][j] = max_value
 
         observation = Observation(config=config, objectives=result["objectives"])
         advisor.update_observation(observation)
@@ -126,8 +136,11 @@ def generate_cae_and_simulate(
     config: dict, path: str, mesh_parts: list[pymeshlab.MeshSet], cut_depths: list[int]
 ):
     Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
-    actuated_composite_jaw_meshset = pymeshlab.MeshSet()
-    fixed_composite_jaw_meshset = pymeshlab.MeshSet()
+    actuated_composite_jaws = []
+    fixed_composite_jaws = []
+    fixed_jaw_locations = []
+    actuated_jaw_locations = []
+    regular_parts = []
     for i, mesh_part in enumerate(mesh_parts):
         rotated_mesh_part = pymeshlab.MeshSet()
         rotated_mesh_part.add_mesh(mesh_part.mesh(0))
@@ -147,7 +160,6 @@ def generate_cae_and_simulate(
         rotated_mesh_part.save_current_mesh(f"iterations/{path}/part_geometry_{i}.stl")
 
         client = docker.from_env()
-        client.images.pull(f"pymesh/pymesh")
         client.containers.run(
             "pymesh/pymesh",
             command=[
@@ -164,69 +176,43 @@ def generate_cae_and_simulate(
 
         # Clean Minkowski Sum mesh to make sure we don't run into any trouble
         ms = pymeshlab.MeshSet()
-        ms.load_new_mesh("templates/jaw_block.stl")
-        ms.load_new_mesh("templates/jaw_block.stl")
         ms.load_new_mesh(f"iterations/{path}/part_geometry_{i}_minkowski.stl")
         clean_bad_faces(ms)
-        ms.set_current_mesh(0)
-        ms.compute_matrix_from_translation_rotation_scale(
-            translationx=ms.mesh(2).bounding_box().min()[0] - 15 + cut_depths[i]
+        ms.save_current_mesh(f"iterations/{path}/part_geometry_{i}_minkowski.stl")
+        regular_part = import_stl_as_shape(f"iterations/{path}/part_geometry_{i}.stl")
+        regular_parts.append(regular_part)
+        minkowski_of_part = import_stl_as_shape(
+            f"iterations/{path}/part_geometry_{i}_minkowski.stl"
         )
-        ms.set_current_mesh(1)
-        ms.compute_matrix_from_translation_rotation_scale(
-            translationx=ms.mesh(2).bounding_box().max()[0] + 15 - cut_depths[i]
+        part_bb = regular_part.val().BoundingBox()
+        actuated_composite_jaws.append(
+            cq.Workplane(f"XY")
+            .box(30, 115, 25)
+            .translate((part_bb.xmin - 15, 0, 0))
+            .cut(minkowski_of_part)
+            .translate((cut_depths[i], 0, 0))
         )
-        ms.generate_boolean_difference(first_mesh=0, second_mesh=2)
-        ms.generate_boolean_difference(first_mesh=1, second_mesh=2)
-        ms.set_current_mesh(3)
-        clean_bad_faces(ms)
-        ms.compute_matrix_from_translation_rotation_scale(translationx=cut_depths[i])
-        ms.set_current_mesh(4)
-        clean_bad_faces(ms)
-        ms.compute_matrix_from_translation_rotation_scale(translationx=-cut_depths[i])
-        actuated_composite_jaw_meshset.add_mesh(ms.mesh(3))
-        fixed_composite_jaw_meshset.add_mesh(ms.mesh(4))
-
-    fixed_jaw_locations = []
-    actuated_jaw_locations = []
-    for i in range(len(cut_depths)):
         actuated_jaw_locations.append(
-            actuated_composite_jaw_meshset.mesh(i).bounding_box().min()[0]
+            actuated_composite_jaws[-1].val().BoundingBox().xmin
         )
-        fixed_jaw_locations.append(
-            fixed_composite_jaw_meshset.mesh(i).bounding_box().max()[0]
+        actuated_composite_jaws[-1] = actuated_composite_jaws[-1].translate(
+            (-actuated_jaw_locations[-1], 0, 0)
         )
-        actuated_composite_jaw_meshset.set_current_mesh(i)
-        actuated_composite_jaw_meshset.compute_matrix_from_translation_rotation_scale(
-            translationx=-actuated_jaw_locations[i],
+        fixed_composite_jaws.append(
+            cq.Workplane(f"XY")
+            .box(30, 115, 25)
+            .translate((part_bb.xmax + 15, 0, 0))
+            .cut(minkowski_of_part)
+            .translate((-cut_depths[i], 0, 0))
         )
-        fixed_composite_jaw_meshset.set_current_mesh(i)
-        fixed_composite_jaw_meshset.compute_matrix_from_translation_rotation_scale(
-            translationx=-fixed_jaw_locations[i],
+        fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
+        fixed_composite_jaws[-1] = fixed_composite_jaws[-1].translate(
+            (-fixed_jaw_locations[-1], 0, 0)
         )
-    for i in range(len(cut_depths) - 1):
-        actuated_composite_jaw_meshset.generate_boolean_intersection(
-            first_mesh=i, second_mesh=actuated_composite_jaw_meshset.mesh_number() - 1
-        )
-        fixed_composite_jaw_meshset.generate_boolean_intersection(
-            first_mesh=i, second_mesh=fixed_composite_jaw_meshset.mesh_number() - 1
-        )
-    actuated_composite_jaw_meshset.set_current_mesh(
-        actuated_composite_jaw_meshset.mesh_number() - 1
-    )
-    clean_bad_faces(actuated_composite_jaw_meshset)
-    actuated_composite_jaw_meshset.save_current_mesh(
-        f"iterations/{path}/jaw_actuated.stl"
-    )
-    fixed_composite_jaw_meshset.set_current_mesh(
-        fixed_composite_jaw_meshset.mesh_number() - 1
-    )
-    clean_bad_faces(fixed_composite_jaw_meshset)
-    fixed_composite_jaw_meshset.save_current_mesh(f"iterations/{path}/jaw_fixed.stl")
-    composite_actuated_jaw = import_stl_as_shape(f"iterations/{path}/jaw_actuated.stl")
-
-    composite_fixed_jaw = import_stl_as_shape(f"iterations/{path}/jaw_fixed.stl")
+    composite_fixed_jaw = reduce(lambda a, b: a & b, fixed_composite_jaws)
+    composite_actuated_jaw = reduce(lambda a, b: a & b, actuated_composite_jaws)
     displacements = []
+    # return {"objectives": displacements}
     for i in range(len(cut_depths)):
         Path(f"iterations/{path}/{i}").mkdir(parents=True, exist_ok=True)
         export_solid_to_step(
@@ -243,44 +229,44 @@ def generate_cae_and_simulate(
             .wrapped,
             f"iterations/{path}/{i}/jaw_fixed.step",
         )
-        part_brep = import_stl_as_shape(f"iterations/{path}/part_geometry_{i}.stl")
         export_solid_to_step(
-            part_brep.val().Solids()[0].wrapped,
+            regular_parts[i].val().Solids()[0].wrapped,
             f"iterations/{path}/{i}/part_geometry.step",
         )
         shutil.copy(f"templates/clamp.py", f"iterations/{path}/{i}/clamp.py")
         os.chdir(f"iterations/{path}/{i}")
         try:
             process = subprocess.Popen(["abaqus", "cae", "nogui=clamp.py"], shell=True)
-            process.wait(timeout=600)
+            process.wait(timeout=1200)
         except subprocess.TimeoutExpired:
             os.system(f"TASKKILL /F /PID {process.pid} /T")
             logger.info(
-                "FEM ran far longer than expected. Retrying with virtual geometry."
+                "FEM ran far longer than expected. Assuming this is an issue with the geometry."
             )
-            file = open("retry.flag", "w")
-            file.close()
-        if os.path.exists("retry.flag"):
-            # One retry with virtual topology for cases with slivered geometry
-            try:
-                process = subprocess.Popen(
-                    ["abaqus", "cae", "nogui=clamp.py"],
-                    shell=True,
-                )
-                process.wait(timeout=600)
-            except subprocess.TimeoutExpired:
-                os.system(f"TASKKILL /F /PID {process.pid} /T")
-                logger.info(
-                    "FEM ran longer than expected even with virtual geometry. Assuming that geometry is not feasible."
-                )
-                displacements.append(0)
-                os.chdir(os.path.dirname(os.path.realpath(__file__)))
-                break
+            displacements.append(0)
+            os.chdir(os.path.dirname(os.path.realpath(__file__)))
+            continue
+            # file = open("retry.flag", "w")
+            # file.close()
+        # if os.path.exists("retry.flag"):
+        #     # One retry with virtual topology for cases with slivered geometry
+        #     try:
+        #         process = subprocess.Popen(
+        #             ["abaqus", "cae", "nogui=clamp.py"],
+        #             shell=True,
+        #         )
+        #         process.wait(timeout=600)
+        #     except subprocess.TimeoutExpired:
+        #         os.system(f"TASKKILL /F /PID {process.pid} /T")
+        #         logger.info(
+        #             "FEM ran longer than expected even with virtual geometry. Assuming that geometry is not feasible."
+        #         )
+        #         displacements.append(0)
+        #         os.chdir(os.path.dirname(os.path.realpath(__file__)))
+        #         break
         results = json.load(open("results.coam"))
         displacements.append(results["u1"])
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
-        if results["u1"] == 0:
-            break
     return {"objectives": displacements}
 
 
@@ -298,6 +284,7 @@ def clean_bad_faces(ms):
     ms.meshing_merge_close_vertices()
     ms.meshing_repair_non_manifold_edges(method=1)
     ms.meshing_repair_non_manifold_vertices()
+    ms.meshing_remove_null_faces()
 
     # ms.compute_selection_by_self_intersections_per_face()
     # ms.meshing_remove_selected_vertices_and_faces()
