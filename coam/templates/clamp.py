@@ -204,10 +204,10 @@ jaw_fixed.setElementType(
 part_geometry.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 part_geometry.generateMesh()
 
-jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5)
+jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 jaw_actuated.generateMesh()
 
-jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=5)
+jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 jaw_fixed.generateMesh()
 
 part_instance = model.rootAssembly.Instance(
