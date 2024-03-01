@@ -37,7 +37,7 @@ if not jaw_actuated.geometryValidity:
     jaw_actuated.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
-jaw_actuated.ConvertToAnalytical()
+# jaw_actuated.ConvertToAnalytical()
 
 jaw_fixed_acis = session.openStep(
     "jaw_fixed.step",
@@ -55,7 +55,7 @@ if not jaw_fixed.geometryValidity:
     jaw_fixed.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
-jaw_fixed.ConvertToAnalytical()
+# jaw_fixed.ConvertToAnalytical()
 
 part_geometry_acis = session.openStep(
     "part_geometry.step",
@@ -73,7 +73,7 @@ if not part_geometry.geometryValidity:
     part_geometry.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
-part_geometry.ConvertToAnalytical()
+# part_geometry.ConvertToAnalytical()
 
 # Having to set any validity manually necessitates virtual topology to mesh the whole part
 # So no retry is needed
