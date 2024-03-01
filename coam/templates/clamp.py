@@ -447,7 +447,7 @@ if not "Abaqus JOB " + job_name + " COMPLETED" in file.read():
     file.close()
     sys.exit()
 
-odb = visualization.openOdb(str(job_name) + affix + ".odb")
+odb = visualization.openOdb(str(job_name) + ".odb")
 frame = odb.steps["Apply-Force"].frames[-1]
 max_u1 = 0
 max_stress = 10
