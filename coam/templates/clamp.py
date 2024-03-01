@@ -418,7 +418,6 @@ mdb.saveAs(str(job_name) + ".cae")
 job.submit()
 job.waitForCompletion()
 file = open(job_name + ".log")
-affix = ""
 if "*** ERROR CATEGORY:  PRE" in file.read():
     job_name = "ClampSimulation_no_multi"
     job_single = mdb.Job(
@@ -440,8 +439,8 @@ if "*** ERROR CATEGORY:  PRE" in file.read():
     mdb.saveAs(str(job_name) + ".cae")
     job_single.submit()
     job_single.waitForCompletion()
-    file = open(job_name + ".log")
 
+file = open(job_name + ".log")
 if not "Abaqus JOB " + job_name + " COMPLETED" in file.read():
     file = open("results.coam", "w")
     file.write(json.dumps({"u1": 0, "s": 0}))
