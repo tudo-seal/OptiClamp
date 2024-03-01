@@ -1,4 +1,6 @@
 import json
+import time
+
 import optimization
 import os
 
@@ -35,6 +37,7 @@ if not jaw_actuated.geometryValidity:
     jaw_actuated.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
+jaw_actuated.ConvertToAnalytical()
 
 jaw_fixed_acis = session.openStep(
     "jaw_fixed.step",
@@ -52,6 +55,7 @@ if not jaw_fixed.geometryValidity:
     jaw_fixed.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
+jaw_fixed.ConvertToAnalytical()
 
 part_geometry_acis = session.openStep(
     "part_geometry.step",
@@ -69,6 +73,7 @@ if not part_geometry.geometryValidity:
     part_geometry.setValues(geometryValidity=True)
     file = open("retry.flag", "w")
     file.close()
+part_geometry.ConvertToAnalytical()
 
 # Having to set any validity manually necessitates virtual topology to mesh the whole part
 # So no retry is needed
@@ -405,21 +410,45 @@ job = mdb.Job(
     numDomains=24,
     numGPUs=1,
     type=ANALYSIS,
+    multiprocessingMode=THREADS,
 )
 
-mdb.jobs[job_name].writeInput()
+job.writeInput()
 mdb.saveAs(str(job_name) + ".cae")
 job.submit()
 job.waitForCompletion()
+file = open(job_name + ".log")
+affix = ""
+if "*** ERROR CATEGORY:  PRE" in file.read():
+    job_name = "ClampSimulation_no_multi"
+    job_single = mdb.Job(
+        contactPrint=OFF,
+        echoPrint=OFF,
+        explicitPrecision=SINGLE,
+        historyPrint=OFF,
+        model="ClampSimulation",
+        modelPrint=OFF,
+        name=job_name,
+        nodalOutputPrecision=SINGLE,
+        numCpus=1,
+        numDomains=1,
+        numGPUs=1,
+        type=ANALYSIS,
+        multiprocessingMode=THREADS,
+    )
+    job_single.writeInput()
+    mdb.saveAs(str(job_name) + ".cae")
+    job_single.submit()
+    job_single.waitForCompletion()
+    file = open(job_name + ".log")
 
-file = open("ClampSimulation.log")
-if not "Abaqus JOB ClampSimulation COMPLETED" in file.read():
+if not "Abaqus JOB " + job_name + " COMPLETED" in file.read():
     file = open("results.coam", "w")
     file.write(json.dumps({"u1": 0, "s": 0}))
     file.close()
     sys.exit()
 
-odb = visualization.openOdb(str(job_name) + ".odb")
+odb = visualization.openOdb(str(job_name) + affix + ".odb")
 frame = odb.steps["Apply-Force"].frames[-1]
 max_u1 = 0
 max_stress = 10
