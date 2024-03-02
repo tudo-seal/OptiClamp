@@ -41,13 +41,14 @@ def main():
     num_parts = 2
     rotations = []
     mesh_sets = []
+    obstacle_sets = []
     cut_depths = []
     part_names = []
     for i in range(num_parts):
         rotations.append(sp.Real(f"rotation_{i}", 0.0, 360))
         os.chdir("resources")
         part_name = choicebox(
-            "Select part",
+            f"Select part {i}",
             [
                 Path(file).stem
                 for file in glob.glob("*.stl")
@@ -55,6 +56,19 @@ def main():
             ],
         )
         part_names.append(part_name)
+        mesh_set = remesh_simplify_part(f"{part_name}.stl")
+        mesh_sets.append(mesh_set)
+        obstacle_name = choicebox(
+            f"Select obstacle geometry for part {i}",
+            [
+                Path(file).stem
+                for file in glob.glob("*.stl")
+                if Path(file).stem not in part_names
+            ],
+        )
+        part_names.append(obstacle_name)
+        obstacle_mesh_set = remesh_simplify_part(f"{obstacle_name}.stl")
+        obstacle_sets.append(obstacle_mesh_set)
         cut_depths.append(
             tkinter.simpledialog.askinteger(
                 "Cut Depth",
@@ -62,8 +76,6 @@ def main():
                 initialvalue=(i + 1) * 3,
             )
         )
-        mesh_set = remesh_simplify_part(f"{part_name}.stl")
-        mesh_sets.append(mesh_set)
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
     space.add_variables(rotations)
     experiment_identifier = (
@@ -90,30 +102,13 @@ def main():
         print()
         logger.info(f"Config is: {config}")
         result = generate_cae_and_simulate(
-            config, f"{experiment_identifier}/Iter_{i}", mesh_sets, cut_depths
+            config,
+            f"{experiment_identifier}/Iter_{i}",
+            mesh_sets,
+            obstacle_sets,
+            cut_depths,
         )
-        # Resample if that was numerically not stable (perhaps overkill, but we like being very safe)
-        # failed_fem_indexes = [
-        #     index
-        #     for index, objective in enumerate(result["objectives"])
-        #     if objective == 0
-        # ]
-        # if len(failed_fem_indexes) > 0:
-        #     new_config = copy.deepcopy(config)
-        #     for j in failed_fem_indexes:
-        #         new_config[f"rotation_{j}"] += 0.1
-        #
-        #     logger.info(
-        #         f"FEM was not stable for orientation {j}. Resampling close to this iteration."
-        #     )
-        #     logger.info(f"New config is: {new_config}")
-        #     result = generate_cae_and_simulate(
-        #         new_config,
-        #         f"{experiment_identifier}/Iter_{i}_Retry",
-        #         mesh_sets,
-        #         cut_depths,
-        #     )
-        # We are sufficiently sure that this is an issue with the actual rotation, leading to no contact
+
         for j, objective in enumerate(result["objectives"]):
             if objective != 0:
                 continue
@@ -132,7 +127,11 @@ def main():
 
 
 def generate_cae_and_simulate(
-    config: dict, path: str, mesh_parts: list[pymeshlab.MeshSet], cut_depths: list[int]
+    config: dict,
+    path: str,
+    mesh_parts: list[pymeshlab.MeshSet],
+    obstacle_mesh_parts: list[pymeshlab.MeshSet],
+    cut_depths: list[int],
 ):
     Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
     actuated_composite_jaws = []
@@ -140,48 +139,39 @@ def generate_cae_and_simulate(
     fixed_jaw_locations = []
     actuated_jaw_locations = []
     regular_parts = []
-    for i, mesh_part in enumerate(mesh_parts):
-        rotated_mesh_part = pymeshlab.MeshSet()
-        rotated_mesh_part.add_mesh(mesh_part.mesh(0))
-        rotated_mesh_part.generate_copy_of_current_mesh()
-        rotated_mesh_part.compute_matrix_from_rotation(
-            rotaxis="Z axis", angle=config[f"rotation_{i}"]
+    for i in range(len(mesh_parts)):
+        mesh_part = mesh_parts[i]
+        obstacle_part = obstacle_mesh_parts[i]
+        translate_center = rotate_and_save_mesh(
+            config[f"rotation_{i}"],
+            mesh_part,
+            f"iterations/{path}/part_geometry_{i}.stl",
         )
-        translate_center = (
-            rotated_mesh_part.mesh(0).bounding_box().max()
-            + rotated_mesh_part.mesh(0).bounding_box().min()
-        ) / 2
-        rotated_mesh_part.compute_matrix_from_translation_rotation_scale(
-            translationx=-translate_center[0],
-            translationy=-translate_center[1],
-            translationz=-translate_center[2],
-        )
-        rotated_mesh_part.save_current_mesh(f"iterations/{path}/part_geometry_{i}.stl")
-
-        client = docker.from_env()
-        client.containers.run(
-            "pymesh/pymesh",
-            command=[
-                "python",
-                "/tmp/minkowski/minkowski.py",
-                f"part_geometry_{i}.stl",
-                f"{cut_depths[i]}",
-                f"{path}",
-            ],
-            volumes={os.getcwd(): {"bind": "/tmp/", f"mode": "rw"}},
-            detach=False,
-            auto_remove=True,
+        rotate_and_save_mesh(
+            config[f"rotation_{i}"],
+            obstacle_part,
+            f"iterations/{path}/obstacle_geometry_{i}.stl",
+            seed_translate_center=translate_center,
         )
 
-        # Clean Minkowski Sum mesh to make sure we don't run into any trouble
+        create_minkowski_stl(cut_depths[i], f"part_geometry_{i}.stl", path)
+        create_minkowski_stl(cut_depths[i], f"obstacle_geometry_{i}.stl", path)
+
+        # Clean Minkowski Sum meshes to make sure we don't run into any trouble
         ms = pymeshlab.MeshSet()
         ms.load_new_mesh(f"iterations/{path}/part_geometry_{i}_minkowski.stl")
         clean_bad_faces(ms)
         ms.save_current_mesh(f"iterations/{path}/part_geometry_{i}_minkowski.stl")
+        ms.load_new_mesh(f"iterations/{path}/obstacle_geometry_{i}_minkowski.stl")
+        clean_bad_faces(ms)
+        ms.save_current_mesh(f"iterations/{path}/obstacle_geometry_{i}_minkowski.stl")
         regular_part = import_stl_as_shape(f"iterations/{path}/part_geometry_{i}.stl")
         regular_parts.append(regular_part)
         minkowski_of_part = import_stl_as_shape(
             f"iterations/{path}/part_geometry_{i}_minkowski.stl"
+        )
+        minkowski_of_obstacle = import_stl_as_shape(
+            f"iterations/{path}/obstacle_geometry_{i}_minkowski.stl"
         )
         part_bb = regular_part.val().BoundingBox()
         actuated_composite_jaws.append(
@@ -189,6 +179,7 @@ def generate_cae_and_simulate(
             .box(30, 115, 25)
             .translate((part_bb.xmin - 15, 0, 0))
             .cut(minkowski_of_part)
+            .cut(minkowski_of_obstacle)
             .translate((cut_depths[i], 0, 0))
         )
         actuated_jaw_locations.append(
@@ -202,12 +193,15 @@ def generate_cae_and_simulate(
             .box(30, 115, 25)
             .translate((part_bb.xmax + 15, 0, 0))
             .cut(minkowski_of_part)
+            .cut(minkowski_of_obstacle)
             .translate((-cut_depths[i], 0, 0))
         )
         fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
         fixed_composite_jaws[-1] = fixed_composite_jaws[-1].translate(
             (-fixed_jaw_locations[-1], 0, 0)
         )
+
+    # Make final geometries
     composite_fixed_jaw = reduce(lambda a, b: a & b, fixed_composite_jaws)
     composite_actuated_jaw = reduce(lambda a, b: a & b, actuated_composite_jaws)
     displacements = []
@@ -267,6 +261,43 @@ def generate_cae_and_simulate(
         displacements.append(results["u1"])
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
     return {"objectives": displacements}
+
+
+def create_minkowski_stl(cut_depth, name, path):
+    client = docker.from_env()
+    client.containers.run(
+        "pymesh/pymesh",
+        command=[
+            "python",
+            "/tmp/minkowski/minkowski.py",
+            name,
+            f"{cut_depth}",
+            f"{path}",
+        ],
+        volumes={os.getcwd(): {"bind": "/tmp/", f"mode": "rw"}},
+        detach=False,
+        auto_remove=True,
+    )
+
+
+def rotate_and_save_mesh(rotation, mesh_part, path, seed_translate_center=None):
+    rotated_mesh_part = pymeshlab.MeshSet()
+    rotated_mesh_part.add_mesh(mesh_part.mesh(0))
+    rotated_mesh_part.generate_copy_of_current_mesh()
+    rotated_mesh_part.compute_matrix_from_rotation(rotaxis="Z axis", angle=rotation)
+    translate_center = (
+        rotated_mesh_part.mesh(0).bounding_box().max()
+        + rotated_mesh_part.mesh(0).bounding_box().min()
+    ) / 2
+    if seed_translate_center is not None:
+        translate_center = seed_translate_center
+    rotated_mesh_part.compute_matrix_from_translation_rotation_scale(
+        translationx=-translate_center[0],
+        translationy=-translate_center[1],
+        translationz=-translate_center[2],
+    )
+    rotated_mesh_part.save_current_mesh(path)
+    return translate_center
 
 
 def remesh_simplify_part(filename: str):

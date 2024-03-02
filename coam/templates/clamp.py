@@ -211,9 +211,39 @@ part_geometry.generateMesh()
 
 jaw_actuated.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 jaw_actuated.generateMesh()
+if jaw_actuated.getUnmeshedRegions() is not None:
+    jaw_actuated.createVirtualTopology(
+        applyBlendControls=False,
+        cornerAngleTolerance=30.0,
+        faceAspectRatioThreshold=10.0,
+        ignoreRedundantEntities=True,
+        mergeShortEdges=False,
+        mergeSliverFaces=True,
+        mergeSmallAngleFaces=True,
+        mergeSmallFaces=False,
+        mergeThinStairFaces=True,
+        smallFaceCornerAngleThreshold=10.0,
+        thinStairFaceThreshold=0.12,
+    )
+    jaw_actuated.generateMesh()
 
 jaw_fixed.seedPart(deviationFactor=0.1, minSizeFactor=0.1, size=4)
 jaw_fixed.generateMesh()
+if jaw_fixed.getUnmeshedRegions() is not None:
+    jaw_fixed.createVirtualTopology(
+        applyBlendControls=False,
+        cornerAngleTolerance=30.0,
+        faceAspectRatioThreshold=10.0,
+        ignoreRedundantEntities=True,
+        mergeShortEdges=False,
+        mergeSliverFaces=True,
+        mergeSmallAngleFaces=True,
+        mergeSmallFaces=False,
+        mergeThinStairFaces=True,
+        smallFaceCornerAngleThreshold=10.0,
+        thinStairFaceThreshold=0.12,
+    )
+    jaw_fixed.generateMesh()
 
 part_instance = model.rootAssembly.Instance(
     dependent=ON, name="part_geometry-1", part=part_geometry

@@ -1,11 +1,18 @@
+import random
+
 import cadquery as cq
 import OCP
 from cadquery import Shape, Workplane
 from OCP import TopoDS
-from OCP.BOPAlgo import BOPAlgo_Builder
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing
+from OCP.BRepFeat import BRepFeat_SplitShape
+from OCP.BRepGProp import BRepGProp
 from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
-from OCP.gp import gp_Vec
+from OCP.GeomAbs import GeomAbs_SurfaceType
+from OCP.gp import gp, gp_Pln, gp_Vec
+from OCP.GProp import GProp_GProps
 from OCP.Interface import Interface_Static
 from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Wireframe
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
@@ -16,7 +23,14 @@ from OCP.STEPControl import (
 )
 from OCP.StepShape import StepShape_AdvancedFace
 from OCP.StlAPI import StlAPI
-from OCP.TopAbs import TopAbs_FACE, TopAbs_ShapeEnum, TopAbs_SHELL
+from OCP.TopAbs import (
+    TopAbs_EDGE,
+    TopAbs_FACE,
+    TopAbs_Orientation,
+    TopAbs_REVERSED,
+    TopAbs_ShapeEnum,
+    TopAbs_SHELL,
+)
 from OCP.TopExp import TopExp_Explorer
 
 
@@ -24,10 +38,11 @@ def import_stl_as_shape(filename: str):
     shape = OCP.TopoDS.TopoDS_Shape()
     StlAPI.Read_s(shape, filename)
     sew = BRepBuilderAPI_Sewing()
-    # sew.SetTolerance(1e-4)
     sew.Add(shape)
+    # sew.SetTolerance(1e-4)
     sew.Perform()
     shape: OCP.TopoDS.TopoDS_Shape = sew.SewedShape()
+
     if shape.IsNull():
         raise Exception("Critical error, STL could not be sewn into a shape.")
     if shape.ShapeType() == TopAbs_ShapeEnum.TopAbs_COMPOUND:
@@ -56,9 +71,6 @@ def import_stl_as_shape(filename: str):
     shape_upgrade.Build()
 
     shape_fix = ShapeFix_Shape(shape_upgrade.Shape())
-    # shape_fix.FixVertexPositionMode = True
-    # face_tool = shape_fix.FixFaceTool()
-    # face_tool.FixSmallAreaWireMode = True
     shape_fix.Perform()
     wire_fix = ShapeFix_Wireframe(shape_fix.Shape())
     wire_fix.ModeDropSmallEdges = True
@@ -85,6 +97,7 @@ def export_solid_to_step(shape, path):
     Interface_Static.SetIVal_s("write.surfacecurve.mode", False)
     Interface_Static.SetCVal_s("write.step.schema", "AP203")
     writer.Transfer(shape, STEPControl_ManifoldSolidBrep)
+    # writer.Transfer(shape, STEPControl_AsIs)
     writer.Write(path)
 
 
@@ -94,21 +107,106 @@ def import_step_with_minkowski(file_name: str) -> Workplane:
     reader.ReadFile(file_name)
     reader.TransferRoots()
     shape = reader.OneShape()
-
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-    builder = BOPAlgo_Builder()
+    cq_shape = Shape.cast(shape)
+    cq_shape = cq_shape.rotate((0, 0, 0), (0, 0, 1), random.randint(0, 360))
+    exp = TopExp_Explorer(cq_shape.wrapped, TopAbs_FACE)
+    shapes = []
     while exp.More():
-        face: TopoDS.TopoDS_Shape = exp.Current()
+        face: TopoDS.TopoDS_Face = OCP.TopoDS.TopoDS().Face_s(exp.Current())
+        surface = BRepAdaptor_Surface(face)
+        if surface.IsUClosed() or surface.IsVClosed():
+            splitter = split_shape_in_center(face)
+            for split_shape in splitter.DirectLeft():
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(3, 0, 0)).Shape()
+                )
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(-3, 0, 0)).Shape()
+                )
+            for split_shape in splitter.Right():
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(3, 0, 0)).Shape()
+                )
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(-3, 0, 0)).Shape()
+                )
+        elif surface.GetType() == GeomAbs_SurfaceType.GeomAbs_Plane:
+            normal_vec = get_normal_vector_of_face(face, surface)
+            if normal_vec[0] == 0:
+                # These can never be relevant for the minkowski sum if one is only interested in the cut of that depth
+                exp.Next()
+                continue
+            shapes.append(BRepPrimAPI_MakePrism(exp.Current(), gp_Vec(3, 0, 0)).Shape())
+            shapes.append(
+                BRepPrimAPI_MakePrism(exp.Current(), gp_Vec(-3, 0, 0)).Shape()
+            )
+        else:
+            splitter = split_shape_in_center(exp.Current())
+            for split_shape in splitter.DirectLeft():
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(3, 0, 0)).Shape()
+                )
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(-3, 0, 0)).Shape()
+                )
+            for split_shape in splitter.Right():
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(3, 0, 0)).Shape()
+                )
+                shapes.append(
+                    BRepPrimAPI_MakePrism(split_shape, gp_Vec(-3, 0, 0)).Shape()
+                )
         exp.Next()
-        shape = BRepPrimAPI_MakePrism(face, gp_Vec(10, 0, 0)).Shape()
-        builder.AddArgument(shape)
-    print("Fusing")
-    builder.SetRunParallel(True)
-    builder.Perform()
 
-    cq_shape = Shape.cast(builder.Shape())
-    cq_shape.exportStep("test.step")
-    return cq.Workplane(f"XY").newObject([cq_shape])
+    fused_shape = cq_shape.copy()
+    fused_shape = fused_shape.fuse(cq_shape.copy().translate((-3, 0, 0)))
+    fused_shape = fused_shape.fuse(cq_shape.copy().translate((3, 0, 0)))
+    shapes.append(fused_shape.wrapped)
+
+    export_solid_to_step(
+        cq.Compound.makeCompound([Shape.cast(shape) for shape in shapes]).wrapped,
+        f"result.step",
+    )
+
+
+def get_normal_vector_of_face(face, surface):
+    plane: gp_Pln = surface.Plane()
+    orientation: TopAbs_Orientation = face.Orientation()
+    normal_vec = (
+        round(plane.Axis().Direction().X(), 4)
+        if orientation != TopAbs_REVERSED
+        else -round(plane.Axis().Direction().X(), 4),
+        round(plane.Axis().Direction().Y(), 4)
+        if orientation != TopAbs_REVERSED
+        else -round(plane.Axis().Direction().Y(), 4),
+        round(plane.Axis().Direction().Z(), 4)
+        if orientation != TopAbs_REVERSED
+        else -round(plane.Axis().Direction().Z(), 4),
+    )
+    return normal_vec
+
+
+def split_shape_in_center(face):
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props)
+    section = BRepAlgoAPI_Section(face, gp_Pln(props.CentreOfMass(), gp.DX_s()), False)
+    section.ComputePCurveOn1(True)
+    section.Approximation(True)
+    export_solid_to_step(face, f"precut.step")
+    section.Build()
+    export_solid_to_step(section.Shape(), f"cut.step")
+    exp_i = TopExp_Explorer(section.Shape(), TopAbs_EDGE)
+    splitter = BRepFeat_SplitShape(face)
+    while exp_i.More():
+        face = OCP.TopoDS.TopoDS_Shape()
+        if section.HasAncestorFaceOn1(exp_i.Current(), face):
+            splitter.Add(
+                OCP.TopoDS.TopoDS().Edge_s(exp_i.Current()),
+                OCP.TopoDS.TopoDS().Face_s(face),
+            )
+        exp_i.Next()
+    splitter.Build()
+    return splitter
 
 
 def import_step_with_markers(file_name: str) -> tuple[Workplane, list[int]]:
