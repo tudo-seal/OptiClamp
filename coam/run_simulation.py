@@ -1,24 +1,38 @@
 import datetime
 import glob
 import json
+import logging
 import os
 import shutil
 import subprocess
-import tkinter.simpledialog
+import sys
+import threading
+import webbrowser
 from functools import reduce
+from logging import Logger
 from pathlib import Path
+from wsgiref.simple_server import make_server
 
 import cadquery as cq
+import colorlog
+import customtkinter
 import docker
+import optuna
 import pymeshlab
+import torch
+from botorch.settings import validate_input_scaling
 from cadquery import Workplane
 from jinja2 import Environment, PackageLoader
-from openbox import Advisor, Observation, logger
-from openbox import space as sp
-from tqdm import tqdm
+from optuna import Trial
+from optuna_dashboard import wsgi
 
-from coam.util.choicebox import choicebox
+import coam.candidate_functions.singletask_gp_qevhi_sampler as st_gp_qevhi
+from coam.candidate_functions.singletask_gp_qevhi_sampler import (
+    singletask_qehvi_candidates_func,
+)
+from coam.util.choicedialog import CTkChoiceDialog
 from coam.util.geometry_io import export_solid_to_step, import_stl_as_shape
+from coam.util.inputdialog import CTkInputDialog
 
 env = Environment(loader=PackageLoader(f"coam", f"templates"))
 
@@ -26,129 +40,129 @@ part_mesh: pymeshlab.MeshSet = None
 part: cq.Workplane = None
 
 
+NUM_PARTS = 2
+FAILURE_VALUE = 0.25
+mesh_sets = []
+obstacle_sets = []
+experiment_identifier = None
+cut_depths = []
+logger: Logger = None
+
+
 def get_faces_for_ids(face_ids: list[int], part: Workplane):
     return [part.val().Faces()[i] for i in face_ids]
 
 
 def main():
-    experiment_name = tkinter.simpledialog.askstring(
-        "Experiment Name", "Name for optimisation: "
-    )
+    global mesh_sets, obstacle_sets, experiment_identifier, cut_depths, logger
+    customtkinter.set_appearance_mode("dark")
+    customtkinter.CTk()
+    experiment_name = CTkInputDialog(
+        text="Name for optimisation: ", title="Experiment Name", entry_text="AM_OPT"
+    ).get_input()
     global part_mesh, part
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    space = sp.Space()
-
-    num_parts = 2
-    rotations = []
-    mesh_sets = []
-    obstacle_sets = []
-    cut_depths = []
     part_names = []
-    for i in range(num_parts):
-        rotations.append(sp.Real(f"rotation_{i}", 0.0, 360))
+    for i in range(NUM_PARTS):
         os.chdir("resources")
-        part_name = choicebox(
-            f"Select part {i}",
+        part_name = CTkChoiceDialog(
+            "Choose geometry",
+            f"Select geometry for part {i}",
             [
                 Path(file).stem
                 for file in glob.glob("*.stl")
                 if Path(file).stem not in part_names
             ],
-        )
+        ).get_input()
         part_names.append(part_name)
         mesh_set = remesh_simplify_part(f"{part_name}.stl")
         mesh_sets.append(mesh_set)
-        obstacle_name = choicebox(
+        obstacle_name = CTkChoiceDialog(
+            "Choose obstacle geometry",
             f"Select obstacle geometry for part {i}",
             [
                 Path(file).stem
                 for file in glob.glob("*.stl")
                 if Path(file).stem not in part_names
             ],
-        )
+        ).get_input()
         part_names.append(obstacle_name)
         obstacle_mesh_set = remesh_simplify_part(f"{obstacle_name}.stl")
         obstacle_sets.append(obstacle_mesh_set)
         cut_depths.append(
-            tkinter.simpledialog.askinteger(
-                "Cut Depth",
-                "Input a cut depth for orientation: ",
-                initialvalue=(i + 1) * 3,
+            float(
+                CTkInputDialog(
+                    text="Input a cut depth for orientation: ",
+                    title="Cut Depth",
+                    entry_text=float((i + 1) * 3),
+                ).get_input()
             )
         )
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    space.add_variables(rotations)
+
     experiment_identifier = (
         f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{experiment_name}"
     )
-    max_value = 0.25
-    advisor = Advisor(
-        space,
-        num_objectives=num_parts,
-        task_id=experiment_name,
-        surrogate_type="gp",
-        initial_trials=9,  # 2*(dim+1)
-        init_strategy="sobol",
-        acq_type="ehvi",
-        acq_optimizer_type="random_scipy",
-        ref_point=[max_value] * num_parts,
-    )
-    max_runs = 59
+    Path(f"iterations/{experiment_identifier}").mkdir(parents=True, exist_ok=True)
     client = docker.from_env()
     client.images.pull(f"pymesh/pymesh")
 
-    for i in tqdm(range(max_runs)):
-        config = advisor.get_suggestion()
-        print()
-        logger.info(f"Config is: {config}")
-        result = generate_cae_and_simulate(
-            config,
-            f"{experiment_identifier}/Iter_{i}",
-            mesh_sets,
-            obstacle_sets,
-            cut_depths,
-        )
-
-        for j, objective in enumerate(result["objectives"]):
-            if objective != 0:
-                continue
-            logger.info(
-                f"FEM was not stable for orientation {j}. Setting to maximum displacement ({max_value})."
-            )
-            result["objectives"][j] = max_value
-
-        observation = Observation(config=config, objectives=result["objectives"])
-        advisor.update_observation(observation)
-        logger.info("Iter %d, objectives: %s." % (i, result["objectives"]))
-    history = advisor.get_history()
-    history.visualize_html(
-        open_html=True, show_importance=True, verify_surrogate=True, advisor=advisor
+    validate_input_scaling(True)
+    sampler = optuna.integration.BoTorchSampler(
+        candidates_func=singletask_qehvi_candidates_func,
+        n_startup_trials=10,
+    )
+    study = optuna.create_study(
+        storage="sqlite:///results.sqlite3",
+        directions=["minimize", "minimize"],
+        sampler=sampler,
+        study_name=experiment_identifier,
     )
 
+    sys.stderr = open(os.devnull, "w")
+    handler = colorlog.StreamHandler(stream=sys.__stdout__)
+    handler.setFormatter(
+        colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
+    )
 
-def generate_cae_and_simulate(
-    config: dict,
-    path: str,
-    mesh_parts: list[pymeshlab.MeshSet],
-    obstacle_mesh_parts: list[pymeshlab.MeshSet],
-    cut_depths: list[int],
-):
-    Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
+    logger = colorlog.getLogger(experiment_name)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+    storage = optuna.storages.RDBStorage("sqlite:///results.sqlite3")
+    app = wsgi(storage)
+    httpd = make_server("localhost", 8080, app)
+    thread = threading.Thread(target=httpd.serve_forever)
+    thread.start()
+    webbrowser.open("http://localhost:8080/", new=0, autoraise=True)
+
+    # Run study till the end of all time
+    study.optimize(generate_cae_and_simulate)
+
+
+def generate_cae_and_simulate(trial: Trial):
+    global mesh_sets, obstacle_sets, experiment_identifier, cut_depths, logger
     actuated_composite_jaws = []
     fixed_composite_jaws = []
     fixed_jaw_locations = []
     actuated_jaw_locations = []
     regular_parts = []
-    for i in range(len(mesh_parts)):
-        mesh_part = mesh_parts[i]
-        obstacle_part = obstacle_mesh_parts[i]
+    path = f"{experiment_identifier}/Trial{trial.number}"
+    Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
+    for i in range(NUM_PARTS):
+        rotation = trial.suggest_float(f"rotation_{i}", 0.0, 360.0)
+        logger.info(
+            f"[TRIAL {trial.number}] Preparing FEM for orienation {i} with rotation of: {rotation}"
+        )
+        mesh_part = mesh_sets[i]
+        obstacle_part = obstacle_sets[i]
         translate_center = rotate_and_save_mesh(
-            config[f"rotation_{i}"],
+            rotation,
             mesh_part,
             f"iterations/{path}/part_geometry_{i}.stl",
         )
         rotate_and_save_mesh(
-            config[f"rotation_{i}"],
+            rotation,
             obstacle_part,
             f"iterations/{path}/obstacle_geometry_{i}.stl",
             seed_translate_center=translate_center,
@@ -179,7 +193,7 @@ def generate_cae_and_simulate(
             .box(30, 115, 25)
             .translate((part_bb.xmin - 15, 0, 0))
             .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle)
+            .cut(minkowski_of_obstacle, tol=1e-4)
             .translate((cut_depths[i], 0, 0))
         )
         actuated_jaw_locations.append(
@@ -193,7 +207,7 @@ def generate_cae_and_simulate(
             .box(30, 115, 25)
             .translate((part_bb.xmax + 15, 0, 0))
             .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle)
+            .cut(minkowski_of_obstacle, tol=1e-4)
             .translate((-cut_depths[i], 0, 0))
         )
         fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
@@ -202,8 +216,12 @@ def generate_cae_and_simulate(
         )
 
     # Make final geometries
-    composite_fixed_jaw = reduce(lambda a, b: a & b, fixed_composite_jaws)
-    composite_actuated_jaw = reduce(lambda a, b: a & b, actuated_composite_jaws)
+    composite_fixed_jaw = reduce(
+        lambda a, b: a.intersect(b, tol=1e-4), fixed_composite_jaws
+    )
+    composite_actuated_jaw = reduce(
+        lambda a, b: a.intersect(b, tol=1e-4), actuated_composite_jaws
+    )
     displacements = []
     # return {"objectives": displacements}
     for i in range(len(cut_depths)):
@@ -230,37 +248,40 @@ def generate_cae_and_simulate(
         os.chdir(f"iterations/{path}/{i}")
         try:
             process = subprocess.Popen(["abaqus", "cae", "nogui=clamp.py"], shell=True)
-            process.wait(timeout=1200)
+            process.wait(timeout=600)
         except subprocess.TimeoutExpired:
             os.system(f"TASKKILL /F /PID {process.pid} /T")
-            logger.info(
-                "FEM ran far longer than expected. Assuming this is an issue with the geometry."
+            logger.warning(
+                f"TRIAL {trial.number}] FEM ran far longer than expected. Assuming this is an issue with the geometry."
             )
-            displacements.append(0)
+            displacements.append(FAILURE_VALUE)
             os.chdir(os.path.dirname(os.path.realpath(__file__)))
             continue
-            # file = open("retry.flag", "w")
-            # file.close()
-        # if os.path.exists("retry.flag"):
-        #     # One retry with virtual topology for cases with slivered geometry
-        #     try:
-        #         process = subprocess.Popen(
-        #             ["abaqus", "cae", "nogui=clamp.py"],
-        #             shell=True,
-        #         )
-        #         process.wait(timeout=600)
-        #     except subprocess.TimeoutExpired:
-        #         os.system(f"TASKKILL /F /PID {process.pid} /T")
-        #         logger.info(
-        #             "FEM ran longer than expected even with virtual geometry. Assuming that geometry is not feasible."
-        #         )
-        #         displacements.append(0)
-        #         os.chdir(os.path.dirname(os.path.realpath(__file__)))
-        #         break
         results = json.load(open("results.coam"))
-        displacements.append(results["u1"])
+        u1 = results["u1"]
+        if u1 == 0:
+            logger.info(
+                f"TRIAL {trial.number}] FEM failed, geometry is invalid. Setting to FAILURE_VALUE."
+            )
+            u1 = FAILURE_VALUE
+        displacements.append(u1)
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    return {"objectives": displacements}
+    logger.info(
+        f"TRIAL {trial.number}] Completed, Persisting Model. Values are: {tuple(displacements)}"
+    )
+    persist_model(path)
+    persist_model(experiment_identifier)
+    return tuple(displacements)
+
+
+def persist_model(path):
+    try:
+        torch.save(st_gp_qevhi.train_x, f"iterations/{path}/x.pt")
+        torch.save(st_gp_qevhi.train_y, f"iterations/{path}/y.pt")
+        torch.save(st_gp_qevhi.bounds, f"iterations/{path}/bounds.pt")
+        torch.save(st_gp_qevhi.model.state_dict(), f"iterations/{path}/model.pth")
+    except Exception:
+        pass
 
 
 def create_minkowski_stl(cut_depth, name, path):

@@ -13,6 +13,13 @@ cadquery = "2.4.0"
 pymeshlab = "^2023.12"
 docker = "^7"
 openbox = { extras = ["extra"], version = "^0" }
+optuna = "^3"
+optuna-dashboard = "^0"
+botorch = "^0.10.0"
+colorlog = "^6"
+optuna-integration = "^3"
+customtkinter = "^5.2.2"
+
 
 [tool.poetry.scripts]
 optimize = "coam.run_simulation:main"

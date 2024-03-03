@@ -217,7 +217,8 @@ if jaw_actuated.getUnmeshedRegions() is not None:
         cornerAngleTolerance=30.0,
         faceAspectRatioThreshold=10.0,
         ignoreRedundantEntities=True,
-        mergeShortEdges=False,
+        mergeShortEdges=True,
+        shortEdgeThreshold=0.1,
         mergeSliverFaces=True,
         mergeSmallAngleFaces=True,
         mergeSmallFaces=False,
@@ -235,7 +236,8 @@ if jaw_fixed.getUnmeshedRegions() is not None:
         cornerAngleTolerance=30.0,
         faceAspectRatioThreshold=10.0,
         ignoreRedundantEntities=True,
-        mergeShortEdges=False,
+        mergeShortEdges=True,
+        shortEdgeThreshold=0.1,
         mergeSliverFaces=True,
         mergeSmallAngleFaces=True,
         mergeSmallFaces=False,
@@ -297,11 +299,11 @@ analysis_step = model.StaticStep(
     nlgeom=ON,
     previous="Initial",
 )
-analysis_step.control.setValues(
-    allowPropagation=OFF,
-    resetDefaultValues=OFF,
-    timeIncrementation=(4.0, 8.0, 9.0, 16.0, 10.0, 4.0, 12.0, 8.0, 6.0, 3.0, 50.0),
-)
+# analysis_step.control.setValues(
+#     allowPropagation=OFF,
+#     resetDefaultValues=OFF,
+#     timeIncrementation=(4.0, 8.0, 9.0, 16.0, 10.0, 4.0, 12.0, 8.0, 6.0, 3.0, 50.0),
+# )
 
 model.fieldOutputRequests["F-Output-1"].setValues(
     variables=("U",),
