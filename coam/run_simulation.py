@@ -26,10 +26,7 @@ from jinja2 import Environment, PackageLoader
 from optuna import Trial
 from optuna_dashboard import wsgi
 
-import coam.candidate_functions.singletask_gp_qevhi_sampler as st_gp_qevhi
-from coam.candidate_functions.singletask_gp_qevhi_sampler import (
-    singletask_qehvi_candidates_func,
-)
+import coam.candidate_functions.singletask_gp_evhi_samplers as st_gp_qevhi
 from coam.util.choicedialog import CTkChoiceDialog
 from coam.util.geometry_io import export_solid_to_step, import_stl_as_shape
 from coam.util.inputdialog import CTkInputDialog
@@ -109,8 +106,8 @@ def main():
 
     validate_input_scaling(True)
     sampler = optuna.integration.BoTorchSampler(
-        candidates_func=singletask_qehvi_candidates_func,
-        n_startup_trials=10,
+        candidates_func=st_gp_qevhi.singletask_qnehvi_candidates_func,
+        n_startup_trials=15,
     )
     study = optuna.create_study(
         storage="sqlite:///results.sqlite3",
@@ -200,7 +197,7 @@ def generate_cae_and_simulate(trial: Trial):
             .box(30, 115, 25)
             .translate((part_bb.xmin - 15, 0, 0))
             .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle, tol=1e-4)
+            .cut(minkowski_of_obstacle)
             .translate((cut_depths[i], 0, 0))
         )
         actuated_jaw_locations.append(
@@ -214,7 +211,7 @@ def generate_cae_and_simulate(trial: Trial):
             .box(30, 115, 25)
             .translate((part_bb.xmax + 15, 0, 0))
             .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle, tol=1e-4)
+            .cut(minkowski_of_obstacle)
             .translate((-cut_depths[i], 0, 0))
         )
         fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
