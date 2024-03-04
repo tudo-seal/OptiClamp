@@ -67,7 +67,6 @@ def singletask_qehvi_candidates_func(
     )
     mll = ExactMarginalLogLikelihood(model.likelihood, model)
     fit_gpytorch_mll(mll)
-    print(model.state_dict())
 
     # Approximate box decomposition similar to Ax when the number of objectives is large.
     # https://github.com/pytorch/botorch/blob/36d09a4297c2a0ff385077b7fcdd5a9d308e40cc/botorch/acquisition/multi_objective/utils.py#L46-L63

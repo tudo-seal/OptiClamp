@@ -137,11 +137,18 @@ def main():
     webbrowser.open("http://localhost:8080/", new=0, autoraise=True)
 
     # Run study till the end of all time
-    study.optimize(generate_cae_and_simulate)
+    study.optimize(
+        generate_cae_and_simulate,
+        catch=(
+            IndexError,
+            IOError,
+        ),
+    )
 
 
 def generate_cae_and_simulate(trial: Trial):
     global mesh_sets, obstacle_sets, experiment_identifier, cut_depths, logger
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
     actuated_composite_jaws = []
     fixed_composite_jaws = []
     fixed_jaw_locations = []
@@ -152,7 +159,7 @@ def generate_cae_and_simulate(trial: Trial):
     for i in range(NUM_PARTS):
         rotation = trial.suggest_float(f"rotation_{i}", 0.0, 360.0)
         logger.info(
-            f"[TRIAL {trial.number}] Preparing FEM for orienation {i} with rotation of: {rotation}"
+            f"[TRIAL {trial.number}] Preparing FEM for orientation {i} with rotation of: {rotation}"
         )
         mesh_part = mesh_sets[i]
         obstacle_part = obstacle_sets[i]
