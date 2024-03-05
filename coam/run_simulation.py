@@ -107,7 +107,8 @@ def main():
     validate_input_scaling(True)
     sampler = optuna.integration.BoTorchSampler(
         candidates_func=st_gp_qevhi.singletask_qnehvi_candidates_func,
-        n_startup_trials=15,
+        n_startup_trials=17,
+        independent_sampler=optuna.samplers.QMCSampler(),
     )
     study = optuna.create_study(
         storage="sqlite:///results.sqlite3",
@@ -139,6 +140,7 @@ def main():
         catch=(
             IndexError,
             IOError,
+            ValueError,
         ),
     )
 
