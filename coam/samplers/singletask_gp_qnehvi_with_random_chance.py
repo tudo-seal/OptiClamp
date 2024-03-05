@@ -1,3 +1,4 @@
+import random
 from typing import Optional
 
 from botorch.acquisition.multi_objective import monte_carlo
@@ -8,6 +9,8 @@ from botorch.models.transforms.outcome import Standardize
 from botorch.optim import optimize_acqf
 from botorch.sampling import SobolQMCNormalSampler
 
+from coam.run_simulation import logger
+
 
 def _get_sobol_qmc_normal_sampler(num_samples: int) -> SobolQMCNormalSampler:
     return SobolQMCNormalSampler(torch.Size((num_samples,)))
@@ -17,6 +20,8 @@ import torch
 from botorch.utils.multi_objective.box_decompositions import NondominatedPartitioning
 from botorch.utils.transforms import normalize, unnormalize
 from gpytorch.mlls import ExactMarginalLogLikelihood
+
+RANDOM_SAMPLE_CHANCE = 0.15
 
 model: SingleTaskGP = None
 train_x: torch.Tensor = None
@@ -101,7 +106,9 @@ def singletask_qnehvi_candidates_func(
     )
 
     candidates = unnormalize(candidates.detach(), bounds=bounds)
-
+    if random.uniform(0, 1) < 0.15:
+        logger.info("Sampled a random configuration for this trial.")
+        candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
     return candidates
 
 
@@ -186,5 +193,7 @@ def singletask_qehvi_candidates_func(
     )
 
     candidates = unnormalize(candidates.detach(), bounds=bounds)
-
+    if random.uniform(0, 1) < RANDOM_SAMPLE_CHANCE:
+        logger.info("Sampled a random configuration for this trial.")
+        candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
     return candidates

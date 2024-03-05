@@ -26,7 +26,7 @@ from jinja2 import Environment, PackageLoader
 from optuna import Trial
 from optuna_dashboard import wsgi
 
-import coam.candidate_functions.singletask_gp_evhi_samplers as st_gp_qevhi
+import coam.samplers.singletask_gp_qnehvi_with_random_chance as st_gp_qevhi
 from coam.util.choicedialog import CTkChoiceDialog
 from coam.util.geometry_io import export_solid_to_step, import_stl_as_shape
 from coam.util.inputdialog import CTkInputDialog
