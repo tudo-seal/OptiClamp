@@ -9,7 +9,6 @@ import sys
 import threading
 import webbrowser
 from functools import reduce
-from logging import Logger
 from pathlib import Path
 from wsgiref.simple_server import make_server
 
@@ -26,7 +25,9 @@ from jinja2 import Environment, PackageLoader
 from optuna import Trial
 from optuna_dashboard import wsgi
 
+import coam.globals
 import coam.samplers.singletask_gp_qnehvi_with_random_chance as st_gp_qevhi
+from coam.globals import FAILURE_VALUE, NUM_PARTS
 from coam.util.choicedialog import CTkChoiceDialog
 from coam.util.geometry_io import export_solid_to_step, import_stl_as_shape
 from coam.util.inputdialog import CTkInputDialog
@@ -37,21 +38,11 @@ part_mesh: pymeshlab.MeshSet = None
 part: cq.Workplane = None
 
 
-NUM_PARTS = 2
-FAILURE_VALUE = 0.25
-mesh_sets = []
-obstacle_sets = []
-experiment_identifier = None
-cut_depths = []
-logger: Logger = None
-
-
 def get_faces_for_ids(face_ids: list[int], part: Workplane):
     return [part.val().Faces()[i] for i in face_ids]
 
 
 def main():
-    global mesh_sets, obstacle_sets, experiment_identifier, cut_depths, logger
     customtkinter.set_appearance_mode("dark")
     customtkinter.CTk()
     experiment_name = CTkInputDialog(
@@ -73,7 +64,7 @@ def main():
         ).get_input()
         part_names.append(part_name)
         mesh_set = remesh_simplify_part(f"{part_name}.stl")
-        mesh_sets.append(mesh_set)
+        coam.globals.mesh_sets.append(mesh_set)
         obstacle_name = CTkChoiceDialog(
             "Choose obstacle geometry",
             f"Select obstacle geometry for part {i}",
@@ -85,8 +76,8 @@ def main():
         ).get_input()
         part_names.append(obstacle_name)
         obstacle_mesh_set = remesh_simplify_part(f"{obstacle_name}.stl")
-        obstacle_sets.append(obstacle_mesh_set)
-        cut_depths.append(
+        coam.globals.obstacle_sets.append(obstacle_mesh_set)
+        coam.globals.cut_depths.append(
             float(
                 CTkInputDialog(
                     text="Input a cut depth for orientation: ",
@@ -97,16 +88,18 @@ def main():
         )
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
 
-    experiment_identifier = (
+    coam.globals.experiment_identifier = (
         f"{datetime.datetime.now():%Y-%m-%d_%H-%M-%S}_{experiment_name}"
     )
-    Path(f"iterations/{experiment_identifier}").mkdir(parents=True, exist_ok=True)
+    Path(f"iterations/{coam.globals.experiment_identifier}").mkdir(
+        parents=True, exist_ok=True
+    )
     client = docker.from_env()
     client.images.pull(f"pymesh/pymesh")
 
     validate_input_scaling(True)
     sampler = optuna.integration.BoTorchSampler(
-        candidates_func=st_gp_qevhi.singletask_qnehvi_candidates_func,
+        candidates_func=st_gp_qevhi.singletask_qehvi_candidates_func,
         n_startup_trials=17,
         independent_sampler=optuna.samplers.QMCSampler(),
     )
@@ -114,7 +107,7 @@ def main():
         storage="sqlite:///results.sqlite3",
         directions=["minimize", "minimize"],
         sampler=sampler,
-        study_name=experiment_identifier,
+        study_name=coam.globals.experiment_identifier,
     )
 
     sys.stderr = open(os.devnull, "w")
@@ -123,9 +116,9 @@ def main():
         colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
     )
 
-    logger = colorlog.getLogger(experiment_name)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    coam.globals.logger = colorlog.getLogger(experiment_name)
+    coam.globals.logger.addHandler(handler)
+    coam.globals.logger.setLevel(logging.INFO)
 
     storage = optuna.storages.RDBStorage("sqlite:///results.sqlite3")
     app = wsgi(storage)
@@ -146,22 +139,21 @@ def main():
 
 
 def generate_cae_and_simulate(trial: Trial):
-    global mesh_sets, obstacle_sets, experiment_identifier, cut_depths, logger
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     actuated_composite_jaws = []
     fixed_composite_jaws = []
     fixed_jaw_locations = []
     actuated_jaw_locations = []
     regular_parts = []
-    path = f"{experiment_identifier}/Trial{trial.number}"
+    path = f"{coam.globals.experiment_identifier}/Trial{trial.number}"
     Path(f"iterations/{path}").mkdir(parents=True, exist_ok=True)
     for i in range(NUM_PARTS):
         rotation = trial.suggest_float(f"rotation_{i}", 0.0, 360.0)
-        logger.info(
+        coam.globals.logger.info(
             f"[TRIAL {trial.number}] Preparing FEM for orientation {i} with rotation of: {rotation}"
         )
-        mesh_part = mesh_sets[i]
-        obstacle_part = obstacle_sets[i]
+        mesh_part = coam.globals.mesh_sets[i]
+        obstacle_part = coam.globals.obstacle_sets[i]
         translate_center = rotate_and_save_mesh(
             rotation,
             mesh_part,
@@ -174,8 +166,10 @@ def generate_cae_and_simulate(trial: Trial):
             seed_translate_center=translate_center,
         )
 
-        create_minkowski_stl(cut_depths[i], f"part_geometry_{i}.stl", path)
-        create_minkowski_stl(cut_depths[i], f"obstacle_geometry_{i}.stl", path)
+        create_minkowski_stl(coam.globals.cut_depths[i], f"part_geometry_{i}.stl", path)
+        create_minkowski_stl(
+            coam.globals.cut_depths[i], f"obstacle_geometry_{i}.stl", path
+        )
 
         # Clean Minkowski Sum meshes to make sure we don't run into any trouble
         ms = pymeshlab.MeshSet()
@@ -200,7 +194,7 @@ def generate_cae_and_simulate(trial: Trial):
             .translate((part_bb.xmin - 15, 0, 0))
             .cut(minkowski_of_part)
             .cut(minkowski_of_obstacle)
-            .translate((cut_depths[i], 0, 0))
+            .translate((coam.globals.cut_depths[i], 0, 0))
         )
         actuated_jaw_locations.append(
             actuated_composite_jaws[-1].val().BoundingBox().xmin
@@ -214,7 +208,7 @@ def generate_cae_and_simulate(trial: Trial):
             .translate((part_bb.xmax + 15, 0, 0))
             .cut(minkowski_of_part)
             .cut(minkowski_of_obstacle)
-            .translate((-cut_depths[i], 0, 0))
+            .translate((-coam.globals.cut_depths[i], 0, 0))
         )
         fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
         fixed_composite_jaws[-1] = fixed_composite_jaws[-1].translate(
@@ -230,7 +224,7 @@ def generate_cae_and_simulate(trial: Trial):
     )
     displacements = []
     # return {"objectives": displacements}
-    for i in range(len(cut_depths)):
+    for i in range(len(coam.globals.cut_depths)):
         Path(f"iterations/{path}/{i}").mkdir(parents=True, exist_ok=True)
         export_solid_to_step(
             composite_actuated_jaw.translate((actuated_jaw_locations[i], 0, 0))
@@ -257,7 +251,7 @@ def generate_cae_and_simulate(trial: Trial):
             process.wait(timeout=600)
         except subprocess.TimeoutExpired:
             os.system(f"TASKKILL /F /PID {process.pid} /T")
-            logger.warning(
+            coam.globals.logger.warning(
                 f"TRIAL {trial.number}] FEM ran far longer than expected. Assuming this is an issue with the geometry."
             )
             displacements.append(FAILURE_VALUE)
@@ -266,17 +260,29 @@ def generate_cae_and_simulate(trial: Trial):
         results = json.load(open("results.coam"))
         u1 = results["u1"]
         if u1 == 0:
-            logger.info(
+            coam.globals.logger.info(
+                f"TRIAL {trial.number}] FEM failed, geometry is invalid. Setting to FAILURE_VALUE."
+            )
+            u1 = FAILURE_VALUE
+        if u1 > 2 * FAILURE_VALUE:
+            coam.globals.logger.info(
+                f"TRIAL {trial.number}] FEM was far outside the expected displacements. "
+                f"Assuming geometry generation failed, failing Trial."
+            )
+            raise ValueError("Trial geometry generation likely to be invalid.")
+            u1 = FAILURE_VALUE
+        if u1 > FAILURE_VALUE:
+            coam.globals.logger.info(
                 f"TRIAL {trial.number}] FEM failed, geometry is invalid. Setting to FAILURE_VALUE."
             )
             u1 = FAILURE_VALUE
         displacements.append(u1)
         os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    logger.info(
+    coam.globals.logger.info(
         f"TRIAL {trial.number}] Completed, Persisting Model. Values are: {tuple(displacements)}"
     )
     persist_model(path)
-    persist_model(experiment_identifier)
+    persist_model(coam.globals.experiment_identifier)
     return tuple(displacements)
 
 
