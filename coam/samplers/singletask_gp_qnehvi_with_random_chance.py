@@ -1,4 +1,3 @@
-import random
 from typing import Optional
 
 from botorch.acquisition.multi_objective import monte_carlo
@@ -8,9 +7,6 @@ from botorch.models import SingleTaskGP
 from botorch.models.transforms.outcome import Standardize
 from botorch.optim import optimize_acqf
 from botorch.sampling import SobolQMCNormalSampler
-
-import coam
-import coam.globals
 
 
 def _get_sobol_qmc_normal_sampler(num_samples: int) -> SobolQMCNormalSampler:
@@ -107,9 +103,9 @@ def singletask_qnehvi_candidates_func(
     )
 
     candidates = unnormalize(candidates.detach(), bounds=bounds)
-    if random.uniform(0, 1) < 0.15:
-        coam.globals.logger.info("Sampled a random configuration for this trial.")
-        candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
+    # if random.uniform(0, 1) < 0.15:
+    #     coam.globals.logger.info("Sampled a random configuration for this trial.")
+    #     candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
     return candidates
 
 
@@ -194,7 +190,7 @@ def singletask_qehvi_candidates_func(
     )
 
     candidates = unnormalize(candidates.detach(), bounds=bounds)
-    if random.uniform(0, 1) < 0.15:
-        coam.globals.logger.info("Sampled a random configuration for this trial.")
-        candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
+    # if random.uniform(0, 1) < 0.15:
+    #     coam.globals.logger.info("Sampled a random configuration for this trial.")
+    #     candidates = unnormalize(candidates.uniform_().detach(), bounds=bounds)
     return candidates
