@@ -23,6 +23,7 @@ customtkinter = "^5.2.2"
 
 [tool.poetry.scripts]
 optimize = "coam.run_simulation:main"
+results = "coam.run_simulation:generate_result_geometry"
 
 [build-system]
 requires = ["poetry-core"]

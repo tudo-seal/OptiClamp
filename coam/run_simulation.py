@@ -138,6 +138,84 @@ def main():
     )
 
 
+def generate_result_geometry():
+    rotations = []
+    customtkinter.set_appearance_mode("dark")
+    customtkinter.CTk()
+    experiment_name = CTkInputDialog(
+        text="Name for result: ", title="Experiment Name", entry_text="AM_RESULT"
+    ).get_input()
+    global part_mesh, part
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    part_names = []
+    for i in range(NUM_PARTS):
+        os.chdir("resources")
+        part_name = CTkChoiceDialog(
+            "Choose geometry",
+            f"Select geometry for part {i}",
+            [
+                Path(file).stem
+                for file in glob.glob("*.stl")
+                if Path(file).stem not in part_names
+            ],
+        ).get_input()
+        part_names.append(part_name)
+        mesh_set = pymeshlab.MeshSet()
+        mesh_set.load_new_mesh(f"{part_name}.stl")
+        coam.globals.mesh_sets.append(mesh_set)
+        obstacle_name = CTkChoiceDialog(
+            "Choose obstacle geometry",
+            f"Select obstacle geometry for part {i}",
+            [
+                Path(file).stem
+                for file in glob.glob("*.stl")
+                if Path(file).stem not in part_names
+            ],
+        ).get_input()
+        part_names.append(obstacle_name)
+        obstacle_mesh_set = pymeshlab.MeshSet()
+        obstacle_mesh_set.load_new_mesh(f"{obstacle_name}.stl")
+        coam.globals.obstacle_sets.append(obstacle_mesh_set)
+        coam.globals.cut_depths.append(
+            float(
+                CTkInputDialog(
+                    text="Input a cut depth for orientation: ",
+                    title="Cut Depth",
+                    entry_text=float((i + 1) * 3),
+                ).get_input()
+            )
+        )
+        rotations.append(
+            float(
+                CTkInputDialog(
+                    text="Input rotation of results to be examined: ",
+                    title="Rotation",
+                    entry_text=float(0),
+                ).get_input()
+            )
+        )
+        os.chdir(os.path.dirname(os.path.realpath(__file__)))
+
+    coam.globals.experiment_identifier = f"{experiment_name}"
+    Path(f"iterations/{coam.globals.experiment_identifier}").mkdir(
+        parents=True, exist_ok=True
+    )
+    client = docker.from_env()
+    client.images.pull(f"pymesh/pymesh")
+
+    sys.stderr = open(os.devnull, "w")
+    handler = colorlog.StreamHandler(stream=sys.__stdout__)
+    handler.setFormatter(
+        colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
+    )
+
+    coam.globals.logger = colorlog.getLogger(experiment_name)
+    coam.globals.logger.addHandler(handler)
+    coam.globals.logger.setLevel(logging.INFO)
+
+    generate_high_res_trial(rotations)
+
+
 def generate_cae_and_simulate(trial: Trial):
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
     actuated_composite_jaws = []
@@ -154,7 +232,7 @@ def generate_cae_and_simulate(trial: Trial):
         )
         mesh_part = coam.globals.mesh_sets[i]
         obstacle_part = coam.globals.obstacle_sets[i]
-        translate_center = rotate_and_save_mesh(
+        translate_center, _ = rotate_and_save_mesh(
             rotation,
             mesh_part,
             f"iterations/{path}/part_geometry_{i}.stl",
@@ -166,9 +244,13 @@ def generate_cae_and_simulate(trial: Trial):
             seed_translate_center=translate_center,
         )
 
-        create_minkowski_stl(coam.globals.cut_depths[i], f"part_geometry_{i}.stl", path)
         create_minkowski_stl(
-            coam.globals.cut_depths[i], f"obstacle_geometry_{i}.stl", path
+            coam.globals.cut_depths[i], f"part_geometry_{i}.stl", f"iterations/{path}"
+        )
+        create_minkowski_stl(
+            coam.globals.cut_depths[i],
+            f"obstacle_geometry_{i}.stl",
+            f"iterations/{path}",
         )
 
         # Clean Minkowski Sum meshes to make sure we don't run into any trouble
@@ -286,6 +368,109 @@ def generate_cae_and_simulate(trial: Trial):
     return tuple(displacements)
 
 
+def generate_high_res_trial(rotations: list):
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    actuated_composite_jaws = []
+    fixed_composite_jaws = []
+    fixed_jaw_locations = []
+    actuated_jaw_locations = []
+    regular_parts = []
+    path = f"{coam.globals.experiment_identifier}"
+    Path(f"results/{path}").mkdir(parents=True, exist_ok=True)
+    for i in range(NUM_PARTS):
+        rotation = rotations[i]
+        coam.globals.logger.info(f"Generating necessary meshes.")
+        mesh_part = coam.globals.mesh_sets[i]
+        obstacle_part = coam.globals.obstacle_sets[i]
+        translate_center, part_bb = rotate_and_save_mesh(
+            rotation,
+            mesh_part,
+            f"results/{path}/part_geometry_{i}.stl",
+        )
+        mesh_part
+        rotate_and_save_mesh(
+            rotation,
+            obstacle_part,
+            f"results/{path}/obstacle_geometry_{i}.stl",
+            seed_translate_center=translate_center,
+        )
+
+        create_minkowski_stl(
+            coam.globals.cut_depths[i], f"part_geometry_{i}.stl", f"results/{path}"
+        )
+        create_minkowski_stl(
+            coam.globals.cut_depths[i], f"obstacle_geometry_{i}.stl", f"results/{path}"
+        )
+
+        # Clean Minkowski Sum meshes to make sure we don't run into any trouble
+        ms = pymeshlab.MeshSet()
+        ms.load_new_mesh(f"results/{path}/part_geometry_{i}_minkowski.stl")
+        clean_bad_faces(ms)
+        ms.save_current_mesh(f"results/{path}/part_geometry_{i}_minkowski.stl")
+        ms.load_new_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
+        clean_bad_faces(ms)
+        ms.save_current_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
+        # ms.load_new_mesh("../templates/jaw_block.stl")
+        # ms.compute_matrix_from_translation_rotation_scale(
+        #     translationx=-part_bb.max()[0] + 15,
+        #     translationy=0,
+        #     translationz=0,
+        # )
+        # ms.generate_boolean_difference()
+        regular_part = import_stl_as_shape(f"results/{path}/part_geometry_{i}.stl")
+        regular_parts.append(regular_part)
+        minkowski_of_part = import_stl_as_shape(
+            f"results/{path}/part_geometry_{i}_minkowski.stl"
+        )
+        minkowski_of_obstacle = import_stl_as_shape(
+            f"results/{path}/obstacle_geometry_{i}_minkowski.stl"
+        )
+        part_bb = regular_part.val().BoundingBox()
+        actuated_composite_jaws.append(
+            cq.Workplane(f"XY")
+            .box(30, 115, 25)
+            .translate((part_bb.xmin - 15, 0, 0))
+            .cut(minkowski_of_part)
+            .cut(minkowski_of_obstacle)
+            .translate((coam.globals.cut_depths[i], 0, 0))
+        )
+        actuated_jaw_locations.append(
+            actuated_composite_jaws[-1].val().BoundingBox().xmin
+        )
+        actuated_composite_jaws[-1] = actuated_composite_jaws[-1].translate(
+            (-actuated_jaw_locations[-1], 0, 0)
+        )
+        fixed_composite_jaws.append(
+            cq.Workplane(f"XY")
+            .box(30, 115, 25)
+            .translate((part_bb.xmax + 15, 0, 0))
+            .cut(minkowski_of_part)
+            .cut(minkowski_of_obstacle)
+            .translate((-coam.globals.cut_depths[i], 0, 0))
+        )
+        fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
+        fixed_composite_jaws[-1] = fixed_composite_jaws[-1].translate(
+            (-fixed_jaw_locations[-1], 0, 0)
+        )
+
+    # Make final geometries
+    composite_fixed_jaw = reduce(
+        lambda a, b: a.intersect(b, tol=1e-4), fixed_composite_jaws
+    )
+    composite_actuated_jaw = reduce(
+        lambda a, b: a.intersect(b, tol=1e-4), actuated_composite_jaws
+    )
+    composite_actuated_jaw.translate((actuated_jaw_locations[i], 0, 0)).val().Solids()[
+        0
+    ].exportStl(f"results/{path}/{i}/jaw_actuated.stl")
+    composite_fixed_jaw.translate((actuated_jaw_locations[i], 0, 0)).val().Solids()[
+        0
+    ].exportStl(f"results/{path}/{i}/jaw_fixed.stl")
+
+    os.chdir(os.path.dirname(os.path.realpath(__file__)))
+    coam.globals.logger.info(f"Completed, Wrote High-Res Files")
+
+
 def persist_model(path):
     try:
         torch.save(st_gp_qevhi.train_x, f"iterations/{path}/x.pt")
@@ -330,7 +515,7 @@ def rotate_and_save_mesh(rotation, mesh_part, path, seed_translate_center=None):
         translationz=-translate_center[2],
     )
     rotated_mesh_part.save_current_mesh(path)
-    return translate_center
+    return translate_center, rotated_mesh_part.mesh(0).bounding_box()
 
 
 def remesh_simplify_part(filename: str):
@@ -356,4 +541,4 @@ def clean_bad_faces(ms):
 
 
 if __name__ == "__main__":
-    main()
+    generate_result_geometry()
