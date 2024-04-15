@@ -203,16 +203,6 @@ def generate_result_geometry():
     client = docker.from_env()
     client.images.pull(f"pymesh/pymesh")
 
-    sys.stderr = open(os.devnull, "w")
-    handler = colorlog.StreamHandler(stream=sys.__stdout__)
-    handler.setFormatter(
-        colorlog.ColoredFormatter("%(log_color)s%(levelname)s:%(name)s:%(message)s")
-    )
-
-    coam.globals.logger = colorlog.getLogger(experiment_name)
-    coam.globals.logger.addHandler(handler)
-    coam.globals.logger.setLevel(logging.INFO)
-
     generate_high_res_trial(rotations)
 
 
@@ -370,16 +360,12 @@ def generate_cae_and_simulate(trial: Trial):
 
 def generate_high_res_trial(rotations: list):
     os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    actuated_composite_jaws = []
-    fixed_composite_jaws = []
-    fixed_jaw_locations = []
-    actuated_jaw_locations = []
-    regular_parts = []
     path = f"{coam.globals.experiment_identifier}"
     Path(f"results/{path}").mkdir(parents=True, exist_ok=True)
+    fixed_jaws = pymeshlab.MeshSet()
+    actuated_jaws = pymeshlab.MeshSet()
     for i in range(NUM_PARTS):
         rotation = rotations[i]
-        coam.globals.logger.info(f"Generating necessary meshes.")
         mesh_part = coam.globals.mesh_sets[i]
         obstacle_part = coam.globals.obstacle_sets[i]
         translate_center, part_bb = rotate_and_save_mesh(
@@ -387,7 +373,6 @@ def generate_high_res_trial(rotations: list):
             mesh_part,
             f"results/{path}/part_geometry_{i}.stl",
         )
-        mesh_part
         rotate_and_save_mesh(
             rotation,
             obstacle_part,
@@ -410,65 +395,46 @@ def generate_high_res_trial(rotations: list):
         ms.load_new_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
         clean_bad_faces(ms)
         ms.save_current_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
-        # ms.load_new_mesh("../templates/jaw_block.stl")
-        # ms.compute_matrix_from_translation_rotation_scale(
-        #     translationx=-part_bb.max()[0] + 15,
-        #     translationy=0,
-        #     translationz=0,
-        # )
-        # ms.generate_boolean_difference()
-        regular_part = import_stl_as_shape(f"results/{path}/part_geometry_{i}.stl")
-        regular_parts.append(regular_part)
-        minkowski_of_part = import_stl_as_shape(
-            f"results/{path}/part_geometry_{i}_minkowski.stl"
+        ms.load_new_mesh("templates/jaw_block.stl")
+        ms.compute_matrix_from_translation_rotation_scale(
+            translationx=part_bb.max()[0] + 15,
+            translationy=0,
+            translationz=0,
         )
-        minkowski_of_obstacle = import_stl_as_shape(
-            f"results/{path}/obstacle_geometry_{i}_minkowski.stl"
+        ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=0)
+        ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=1)
+        ms.compute_matrix_from_translation_rotation_scale(
+            translationx=-part_bb.max()[0] - 15,
+            translationy=0,
+            translationz=0,
         )
-        part_bb = regular_part.val().BoundingBox()
-        actuated_composite_jaws.append(
-            cq.Workplane(f"XY")
-            .box(30, 115, 25)
-            .translate((part_bb.xmin - 15, 0, 0))
-            .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle)
-            .translate((coam.globals.cut_depths[i], 0, 0))
+        fixed_jaws.add_mesh(ms.mesh(ms.current_mesh_id()))
+        ms.save_current_mesh(f"results/{path}/fixed_jaw_{i}.stl")
+        ms.load_new_mesh("templates/jaw_block.stl")
+        ms.compute_matrix_from_translation_rotation_scale(
+            translationx=part_bb.min()[0] - 15,
+            translationy=0,
+            translationz=0,
         )
-        actuated_jaw_locations.append(
-            actuated_composite_jaws[-1].val().BoundingBox().xmin
+        ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=0)
+        ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=1)
+        ms.compute_matrix_from_translation_rotation_scale(
+            translationx=-part_bb.min()[0] + 15,
+            translationy=0,
+            translationz=0,
         )
-        actuated_composite_jaws[-1] = actuated_composite_jaws[-1].translate(
-            (-actuated_jaw_locations[-1], 0, 0)
-        )
-        fixed_composite_jaws.append(
-            cq.Workplane(f"XY")
-            .box(30, 115, 25)
-            .translate((part_bb.xmax + 15, 0, 0))
-            .cut(minkowski_of_part)
-            .cut(minkowski_of_obstacle)
-            .translate((-coam.globals.cut_depths[i], 0, 0))
-        )
-        fixed_jaw_locations.append(fixed_composite_jaws[-1].val().BoundingBox().xmin)
-        fixed_composite_jaws[-1] = fixed_composite_jaws[-1].translate(
-            (-fixed_jaw_locations[-1], 0, 0)
-        )
+        actuated_jaws.add_mesh(ms.mesh(ms.current_mesh_id()))
+        ms.save_current_mesh(f"results/{path}/actuated_jaw_{i}.stl")
 
-    # Make final geometries
-    composite_fixed_jaw = reduce(
-        lambda a, b: a.intersect(b, tol=1e-4), fixed_composite_jaws
-    )
-    composite_actuated_jaw = reduce(
-        lambda a, b: a.intersect(b, tol=1e-4), actuated_composite_jaws
-    )
-    composite_actuated_jaw.translate((actuated_jaw_locations[i], 0, 0)).val().Solids()[
-        0
-    ].exportStl(f"results/{path}/{i}/jaw_actuated.stl")
-    composite_fixed_jaw.translate((actuated_jaw_locations[i], 0, 0)).val().Solids()[
-        0
-    ].exportStl(f"results/{path}/{i}/jaw_fixed.stl")
-
-    os.chdir(os.path.dirname(os.path.realpath(__file__)))
-    coam.globals.logger.info(f"Completed, Wrote High-Res Files")
+    for i in range(NUM_PARTS - 1):
+        fixed_jaws.generate_boolean_intersection(
+            first_mesh=fixed_jaws.current_mesh_id(), second_mesh=i
+        )
+        actuated_jaws.generate_boolean_intersection(
+            first_mesh=actuated_jaws.current_mesh_id(), second_mesh=i
+        )
+    fixed_jaws.save_current_mesh(f"results/{path}/fixed_jaw.stl")
+    actuated_jaws.save_current_mesh(f"results/{path}/actuated_jaw.stl")
 
 
 def persist_model(path):
@@ -515,7 +481,10 @@ def rotate_and_save_mesh(rotation, mesh_part, path, seed_translate_center=None):
         translationz=-translate_center[2],
     )
     rotated_mesh_part.save_current_mesh(path)
-    return translate_center, rotated_mesh_part.mesh(0).bounding_box()
+    return (
+        translate_center,
+        rotated_mesh_part.mesh(rotated_mesh_part.current_mesh_id()).bounding_box(),
+    )
 
 
 def remesh_simplify_part(filename: str):
@@ -541,4 +510,4 @@ def clean_bad_faces(ms):
 
 
 if __name__ == "__main__":
-    generate_result_geometry()
+    main()
