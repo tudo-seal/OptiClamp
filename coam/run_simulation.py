@@ -364,6 +364,33 @@ def generate_high_res_trial(rotations: list):
     Path(f"results/{path}").mkdir(parents=True, exist_ok=True)
     fixed_jaws = pymeshlab.MeshSet()
     actuated_jaws = pymeshlab.MeshSet()
+    box_thickness = max(coam.globals.cut_depths) + 10
+    (
+        cq.Workplane("XY")
+        .box(box_thickness, 100, 25)
+        .faces(">X")
+        .workplane()
+        .pushPoints([(38, 0), (-38, 0)])
+        .circle(8.5 / 2)
+        .extrude(10.0)
+        .edges(">X")
+        .chamfer(0.2)
+        .val()
+        .exportStl("results/fixed_jaw.stl")
+    )
+    (
+        cq.Workplane("XY")
+        .box(box_thickness, 100, 25)
+        .faces("<X")
+        .workplane()
+        .pushPoints([(38, 0), (-38, 0)])
+        .circle(8.5 / 2)
+        .extrude(10.0)
+        .edges("<X")
+        .chamfer(0.2)
+        .val()
+        .exportStl("results/actuated_jaw.stl")
+    )
     for i in range(NUM_PARTS):
         rotation = rotations[i]
         mesh_part = coam.globals.mesh_sets[i]
@@ -395,31 +422,31 @@ def generate_high_res_trial(rotations: list):
         ms.load_new_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
         clean_bad_faces(ms)
         ms.save_current_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
-        ms.load_new_mesh("templates/jaw_block.stl")
+        ms.load_new_mesh("results/fixed_jaw.stl")
         ms.compute_matrix_from_translation_rotation_scale(
-            translationx=part_bb.max()[0] + 15,
+            translationx=part_bb.max()[0] + box_thickness / 2,
             translationy=0,
             translationz=0,
         )
         ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=0)
         ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=1)
         ms.compute_matrix_from_translation_rotation_scale(
-            translationx=-part_bb.max()[0] - 15,
+            translationx=-part_bb.max()[0] - box_thickness / 2,
             translationy=0,
             translationz=0,
         )
         fixed_jaws.add_mesh(ms.mesh(ms.current_mesh_id()))
         ms.save_current_mesh(f"results/{path}/fixed_jaw_{i}.stl")
-        ms.load_new_mesh("templates/jaw_block.stl")
+        ms.load_new_mesh("results/actuated_jaw.stl")
         ms.compute_matrix_from_translation_rotation_scale(
-            translationx=part_bb.min()[0] - 15,
+            translationx=part_bb.min()[0] - box_thickness / 2,
             translationy=0,
             translationz=0,
         )
         ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=0)
         ms.generate_boolean_difference(first_mesh=ms.current_mesh_id(), second_mesh=1)
         ms.compute_matrix_from_translation_rotation_scale(
-            translationx=-part_bb.min()[0] + 15,
+            translationx=-part_bb.min()[0] + box_thickness / 2,
             translationy=0,
             translationz=0,
         )
@@ -510,4 +537,4 @@ def clean_bad_faces(ms):
 
 
 if __name__ == "__main__":
-    main()
+    generate_result_geometry()
