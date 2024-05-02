@@ -2,6 +2,7 @@ import datetime
 import glob
 import json
 import logging
+import multiprocessing
 import os
 import shutil
 import subprocess
@@ -233,7 +234,6 @@ def generate_cae_and_simulate(trial: Trial):
             f"iterations/{path}/obstacle_geometry_{i}.stl",
             seed_translate_center=translate_center,
         )
-
         create_minkowski_stl(
             coam.globals.cut_depths[i], f"part_geometry_{i}.stl", f"iterations/{path}"
         )
@@ -383,7 +383,7 @@ def generate_high_res_trial(rotations: list):
         .box(box_thickness, 100, 25)
         .faces("<X")
         .workplane()
-        .pushPoints([(38, 2.5), (-38, 2.5)])
+        .pushPoints([(25, 2.5), (-25, 2.5)])
         .circle(8.5 / 2)
         .extrude(10.0)
         .edges("<X")
@@ -398,7 +398,7 @@ def generate_high_res_trial(rotations: list):
         translate_center, part_bb = rotate_and_save_mesh(
             rotation,
             mesh_part,
-            f"results/{path}/part_geometry_{i}.stl",
+            f"results/{path}/part_geometry_{i}.obj",
         )
         rotate_and_save_mesh(
             rotation,
@@ -406,9 +406,20 @@ def generate_high_res_trial(rotations: list):
             f"results/{path}/obstacle_geometry_{i}.stl",
             seed_translate_center=translate_center,
         )
-
+        run_command = [
+            "PFPOffset.exe",
+            "-f",
+            f"results/{path}/part_geometry_{i}.obj",
+            "-i=1",
+            f"-t={multiprocessing.cpu_count()-2}",
+            "-d=0.2",
+        ]
+        print(run_command)
+        subprocess.run(run_command)
         create_minkowski_stl(
-            coam.globals.cut_depths[i], f"part_geometry_{i}.stl", f"results/{path}"
+            coam.globals.cut_depths[i],
+            f"part_geometry_{i}_offset_outward_result.stl",
+            f"results/{path}",
         )
         create_minkowski_stl(
             coam.globals.cut_depths[i], f"obstacle_geometry_{i}.stl", f"results/{path}"
@@ -416,9 +427,13 @@ def generate_high_res_trial(rotations: list):
 
         # Clean Minkowski Sum meshes to make sure we don't run into any trouble
         ms = pymeshlab.MeshSet()
-        ms.load_new_mesh(f"results/{path}/part_geometry_{i}_minkowski.stl")
+        ms.load_new_mesh(
+            f"results/{path}/part_geometry_{i}_offset_outward_result_minkowski.stl"
+        )
         clean_bad_faces(ms)
-        ms.save_current_mesh(f"results/{path}/part_geometry_{i}_minkowski.stl")
+        ms.save_current_mesh(
+            f"results/{path}/part_geometry_{i}_offset_outward_result_minkowski.stl"
+        )
         ms.load_new_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
         clean_bad_faces(ms)
         ms.save_current_mesh(f"results/{path}/obstacle_geometry_{i}_minkowski.stl")
