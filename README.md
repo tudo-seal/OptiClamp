@@ -1,6 +1,6 @@
-<kbd><img src="docs/vectors/coam.svg" height="256" ></kbd>
+<kbd><img src="docs/vectors/opticlamp.svg" height="100" ></kbd>
 
-# Clamp Optimizer for Additive Manifacturing
+# OptiClamp
 
 ---
 
@@ -15,7 +15,7 @@ critical features.
 To perform this finishing step, the additive parts need to be fixed. Often, due to their complex geometry, this is not
 possible with a conventional clamp.
 
-COAM facilitates generating custom jaw geometry that allows such parts to be conventionally clamped.
+OptiClamp facilitates generating custom jaw geometry that allows such parts to be conventionally clamped.
 
 This can be useful for parts that are additively manufactured in medium lot-sizes, repeatedly saving time on setting up
 the finishing step.
